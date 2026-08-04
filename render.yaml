@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: ag-harold-jose-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ACTIVE_CHANNEL_ID
+        value: "@pruebajsj"
+      - key: TEST_CHANNEL_ID
+        value: "@pruebajsj"
+      - key: MAIN_CHANNEL_REFERENCE
+        value: "@AGHAROLDJOSE_BOT"
+      - key: TIMEZONE
+        value: "America/Caracas"
