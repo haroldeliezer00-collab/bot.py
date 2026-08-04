@@ -282,7 +282,6 @@ def cleanup_old_state():
 
 
 load_state()
-cleanup_old_state()
 
 # ============================================================
 # UTILIDADES
@@ -1299,6 +1298,8 @@ def main():
     telegram_thread.start()
     telegram_thread.join()
 
+
+cleanup_old_state()
 
 if __name__ == "__main__":
     main()
