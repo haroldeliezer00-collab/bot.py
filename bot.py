@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 import logging
@@ -20,9 +21,13 @@ RESULTS_REFRESH_SECONDS = 60
 SCHEDULER_SECONDS = 30
 POLLING_CONFLICT_WAIT = 20
 
-# Instancias de Flask y Telebot
+# Instancias de Flask y Telebot (leyendo el token de forma segura desde las variables de entorno de Render)
 app = Flask(__name__)
-BOT_TOKEN = "TU_BOT_TOKEN_AQUI"  # Asegúrate de colocar tu token real
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+
+if not BOT_TOKEN:
+    raise ValueError("No se encontró la variable de entorno BOT_TOKEN en Render.")
+
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
 LOTTERIES = {
