@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+import datetime
 import logging
 from flask import Flask, jsonify
 import telebot
@@ -35,28 +36,22 @@ LOTTERIES = {
     "TRIO": {"name": "TRIO ACTIVO"}
 }
 
+# Memoria de control para evitar spam y duplicados en Telegram
+last_sent_cache = {}
+
 # ============================================================
-# FUNCIONES DE LÓGICA INTERNA (Tus funciones originales)
+# FUNCIONES DE LÓGICA INTERNA Y CONTROL ANTI-SPAM
 # ============================================================
 
 def cleanup_old_state():
     log.info("Ejecutando limpieza de estados antiguos...")
-    # Aquí va tu lógica original de limpieza de estados
+    global last_sent_cache
+    last_sent_cache.clear()
 
-def scheduler_loop():
-    while True:
-        try:
-            current = now()
-            # ------------------------------------------------
-            # LIMPIEZA DIARIA
-            # ------------------------------------------------
-            if current.hour == 0 and current.minute == 5:
-                cleanup_old_state()
-
-            time.sleep(SCHEDULER_SECONDS)
-        except Exception as exc:
-            log.exception("Error en scheduler: %s", exc)
-            time.sleep(SCHEDULER_SECONDS)
+def now():
+    import pytz
+    tz = pytz.timezone(TIMEZONE)
+    return datetime.datetime.now(tz)
 
 def pyramid_text():
     return "🎯 PIRÁMIDE AG HAROLD JOSE 🎯\nGenerada correctamente."
@@ -71,17 +66,57 @@ def source_urls(code):
     return []
 
 def send_message(text):
-    # Lógica para enviar mensajes al canal activo
-    return True
+    try:
+        bot.send_message(ACTIVE_CHANNEL_ID, text, disable_web_page_preview=True)
+        return True
+    except Exception as exc:
+        log.error("Error enviando mensaje al canal: %s", exc)
+        return False
 
 def update_all_results(force=False):
-    return {}
+    """
+    Función central que revisa los resultados. 
+    Incluye validación de horarios operativos (ej. evitando la madrugada de 01:00 a 08:00) 
+    y control para no reenviar resultados repetidos.
+    """
+    current = now()
+    
+    # 🛡️ FILTRO DE SEGURIDAD HORARIA: 
+    # Si está entre la 1:00 AM y las 8:00 AM, la lotería no opera; ignoramos las revisiones automáticas.
+    if not force and (1 <= current.hour < 8):
+        return {}
 
-def now():
-    import datetime
-    import pytz
-    tz = pytz.timezone(TIMEZONE)
-    return datetime.datetime.now(tz)
+    results_data = {}
+    
+    # Aquí procesas tus fuentes. Ejemplo de control de duplicados por clave/hora:
+    for code in LOTTERIES:
+        # Simulación de obtención de último resultado (reemplaza con tu lógica de scraping real)
+        # item_key = f"{code}_{fetched_time}_{fetched_animal}"
+        # if not force and last_sent_cache.get(code) == item_key:
+        #     continue  # Ya fue enviado, lo ignoramos para evitar el spam
+        # last_sent_cache[code] = item_key
+        pass
+
+    return results_data
+
+def scheduler_loop():
+    while True:
+        try:
+            current = now()
+            
+            # 1. LIMPIEZA DIARIA A LAS 00:05 AM
+            if current.hour == 0 and current.minute == 5:
+                cleanup_old_state()
+
+            # 2. EJECUCIÓN SEGURA DE MONITOREO DE RESULTADOS
+            # Solo corre el actualizador automático si estamos fuera de horas de descanso (ej. 8 AM a 11 PM)
+            if 8 <= current.hour <= 23:
+                update_all_results(force=False)
+
+            time.sleep(RESULTS_REFRESH_SECONDS)
+        except Exception as exc:
+            log.exception("Error en scheduler: %s", exc)
+            time.sleep(SCHEDULER_SECONDS)
 
 
 # ============================================================
