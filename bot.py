@@ -55,14 +55,14 @@ def obtener_tasa_bcv():
 
 
 def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
-  """Valida rigurosamente que el resultado sea limpio, nuevo y pertenezca a la lotería correcta."""
+  """Valida rigurosamente que el resultado sea limpio, nuevo y pertenezca a su respectiva lotería."""
   global enviados_set
 
   u_loteria = nombre_loteria.upper().strip()
   u_detalle = detalle_resultado.upper().strip()
   u_hora = hora.upper().strip()
 
-  # Validaciones de seguridad para descartar textos basura o nombres numéricos erróneos
+  # Validaciones de seguridad para descartar nombres basura o numéricos
   if not u_loteria or len(u_loteria) < 3 or u_loteria.isdigit():
     return
   if "RULETA ROYAL" in u_loteria or "RULETA ROYAL" in u_detalle:
@@ -83,7 +83,7 @@ def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
   if "-" not in detalle_resultado:
     return
 
-  # Clave única absoluta por Lotería + Hora + Resultado para evitar repeticiones en el día
+  # Clave única absoluta por Lotería + Hora + Resultado exacto para evitar reenvíos
   clave_unica = f"{u_loteria}_{u_hora}_{u_detalle}"
 
   if clave_unica not in enviados_set:
@@ -154,7 +154,7 @@ def tarea_saludo_7am():
   msg = (
       "🎯 AGENCIA HAROLD JOSE 🎯\n\n"
       "🌅 ¡Buenos días a todos! 🌅\n\n"
-      "Ya arrancamos un nuevo día con la mejor energía. Por hier estaremos"
+      "Ya arrancamos un nuevo día con la mejor energía. Por aquí estaremos"
       " compartiendo todos los resultados de los animalitos a medida que vayan"
       " saliendo.\n\n"
       "📢 Nuestros canales oficiales:\n"
@@ -228,66 +228,55 @@ def verificar_resultados():
     if resp.status_code == 200:
       soup = BeautifulSoup(resp.text, "html.parser")
 
-      # Buscamos cada caja o tarjeta contenedora de cada lotería en la página de Win Big
-      tarjetas = soup.find_all(
-          ["div", "section", "article"],
-          class_=lambda x: x
-          and any(
-              k in x.lower()
-              for k in ["card", "box", "item", "lotto", "col", "loteria"]
-          ),
-      )
-      if not tarjetas:
-        tarjetas = soup.find_all(["div", "tr"])
+      # Buscamos cada tarjeta individual contenedora de cada lotería en la página
+      boxes = soup.find_all(["div", "section", "article"])
 
-      for tarjeta in tarjetas:
-        # Extraemos el texto completo de la tarjeta
-        textos = [
-            t.strip()
-            for t in tarjeta.get_text(separator="\n", strip=True).split("\n")
-            if t.strip()
-        ]
-        if not textos:
-          continue
+      for box in boxes:
+        box_text = box.get_text(separator="|", strip=True)
+        if "-" in box_text and (
+            "AM" in box_text.upper() or "PM" in box_text.upper()
+        ):
+          parts = [p.strip() for p in box_text.split("|") if p.strip()]
 
-        # El primer texto válido que no sea una hora ni un número suelto es el nombre de la lotería
-        nombre_loteria = ""
-        indices_inicio_resultados = 0
+          # Extraer el nombre real de la lotería omitiendo números, horas y palabras clave técnicas
+          nombre_lote = ""
+          for p in parts:
+            p_up = p.upper()
+            if (
+                p.isdigit()
+                or "AM" in p_up
+                or "PM" in p_up
+                or "PENDIENTE" in p_up
+                or "PRÓXIMO" in p_up
+                or "-" in p
+            ):
+              continue
+            if len(p) > 2 and "WIN BIG" not in p_up:
+              nombre_lote = p
+              break
 
-        for idx, item in enumerate(textos):
-          item_up = item.upper()
-          # Si encontramos una hora (ej: 08:00 AM), lo que estaba antes era el nombre de la loteria
-          if "AM" in item_up or "PM" in item_up:
-            nombre_loteria = " ".join(textos[:idx]).strip()
-            indices_inicio_resultados = idx
-            break
+          if not nombre_lote or "RULETA ROYAL" in nombre_lote.upper():
+            continue
 
-        if not nombre_loteria or len(nombre_loteria) < 3 or "RULETA ROYAL" in nombre_loteria.upper():
-          continue
-
-        # Limpiar nombres raros o numéricos erróneos
-        nombre_loteria = (
-            nombre_loteria.replace("W", "").replace("WIN BIG", "").strip()
-        )
-        if not nombre_loteria or nombre_loteria.isdigit():
-          continue
-
-        # Ahora recorremos desde donde empiezan los horarios y resultados de esa lotería
-        i = indices_inicio_resultados
-        while i < len(textos) - 1:
-          posible_hora = textos[i]
-          posible_res = textos[i + 1]
-
-          ph_up = posible_hora.upper()
-          if "AM" in ph_up or "PM" in ph_up:
-            if "-" in posible_res and not ("PENDIENTE" in posible_res.upper() or "PRÓXIMO" in posible_res.upper()):
-              procesar_y_enviar_resultado(
-                  nombre_loteria, posible_hora, posible_res
-              )
-            i += 2
-          else:
-            i += 1
-
+          # Recorremos buscando los bloques de hora y resultado dentro de esta misma caja
+          i = 0
+          while i < len(parts) - 1:
+            item = parts[i]
+            item_up = item.upper()
+            if "AM" in item_up or "PM" in item_up:
+              hora_sorteo = item
+              if i + 1 < len(parts):
+                res_sorteo = parts[i + 1]
+                if "-" in res_sorteo and not any(
+                    w in res_sorteo.upper()
+                    for w in ["PENDIENTE", "PRÓXIMO", "EN ESPERA"]
+                ):
+                  procesar_y_enviar_resultado(
+                      nombre_lote, hora_sorteo, res_sorteo
+                  )
+              i += 2
+            else:
+              i += 1
   except Exception as e:
     print(f"Error escaneando WinBig: {e}")
 
