@@ -33,7 +33,7 @@ scheduler = BackgroundScheduler(timezone="America/Caracas")
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
 
-# Listado oficial de loterías ordenadas de mayor a menor longitud para evitar cruces
+# Listado oficial de loterías ordenadas de mayor a menor longitud
 LOTERIAS_VALIDAS = sorted(
     [
         "LOTTO ACTIVO RD INT",
@@ -427,7 +427,7 @@ def enviar_mensaje_cierre():
   taquilla_activa_hoy = False
 
 
-# ================= VERIFICACIÓN PRECISA Y ANTI-DUPLICADOS (CADA 30 SEGUNDOS) =================
+# ================= VERIFICACIÓN PRECISA Y QUIRÚRGICA (CADA 30 SEGUNDOS) =================
 def verificar_resultados():
   global resultados_enviados, primera_ejecucion
   try:
@@ -438,31 +438,57 @@ def verificar_resultados():
 
     soup = BeautifulSoup(respuesta.text, "html.parser")
 
-    # Buscar contenedores principales de tarjetas de lotería
-    tarjetas = soup.find_all(
+    # Aislar de forma exacta los bloques principales de cada lotería en la página
+    candidatos = soup.find_all(
         ["div", "article", "section"],
         class_=re.compile(r"card|box|item|lotto|result|panel|col", re.IGNORECASE),
     )
+    if not candidatos:
+      candidatos = soup.find_all(["div", "section"])
+
+    # Filtrar solo las tarjetas hoja (las más internas que contienen los sorteos individuales)
+    tarjetas = []
+    for c in candidatos:
+      tiene_hijos = any(h in c.find_all(True) for h in candidatos if h != c)
+      if not tiene_hijos:
+        tarjetas.append(c)
     if not tarjetas:
-      tarjetas = soup.find_all(["div", "section"])
+      tarjetas = candidatos
 
     nuevos_encontrados = []
 
     for tarjeta in tarjetas:
       texto_tarjeta = tarjeta.get_text(" | ", strip=True).upper()
 
-      # Identificar de forma estricta el nombre de la lotería oficial
+      # Buscar el título exacto en la cabecera de la tarjeta
+      elem_titulo = tarjeta.find(
+          ["h1", "h2", "h3", "h4", "h5", "strong", "b", "div", "span"],
+          class_=re.compile(r"title|header|name|lotto", re.IGNORECASE),
+      )
+      texto_titulo = elem_titulo.get_text(" ", strip=True).upper() if elem_titulo else ""
+
       nombre_loteria = None
+      # 1. Verificar coincidencia estricta en el título de la tarjeta
       for loteria_valida in LOTERIAS_VALIDAS:
-        # Validar que el nombre oficial esté presente como palabra exacta al inicio o dentro del bloque clave
-        patron_inicio = r"(?:^|\\|\b)" + re.escape(loteria_valida) + r"(?:\b|$)"
-        if re.search(patron_inicio, texto_tarjeta[:80]):
+        if (
+            loteria_valida == texto_titulo
+            or texto_titulo.startswith(loteria_valida + " ")
+            or texto_titulo.startswith(loteria_valida + "-")
+        ):
           nombre_loteria = loteria_valida
           break
+
+      # 2. Si no está en la cabecera, buscar coincidencia exacta al inicio del texto completo
+      if not nombre_loteria:
+        for loteria_valida in LOTERIAS_VALIDAS:
+          if texto_tarjeta.startswith(loteria_valida) or f" {loteria_valida} " in texto_tarjeta[:40]:
+            nombre_loteria = loteria_valida
+            break
 
       if not nombre_loteria or "RULETA ROYAL" in nombre_loteria:
         continue
 
+      # Extraer bloques de horas y resultados internos de esta tarjeta específica
       partes = [p.strip() for p in texto_tarjeta.split(" | ") if p.strip()]
 
       i = 0
@@ -485,18 +511,14 @@ def verificar_resultados():
             ):
               resultado_limpio = limpiar_texto(res_sorteo).upper()
 
-              # Clave única absoluta por Lotería + Hora + Resultado exacto
+              # Clave única absoluta por Lotería + Hora + Resultado
               clave = (nombre_loteria, hora_sorteo, resultado_limpio)
 
               if primera_ejecucion:
                 resultados_enviados.add(clave)
               else:
-                # Comprobar que no se haya enviado este resultado ni esta hora para esta lotería específica
-                ya_enviado = clave in resultados_enviados or any(
-                    c[0] == nombre_loteria and c[1] == hora_sorteo
-                    for c in resultados_enviados
-                )
-                if not ya_enviado:
+                # Verificar estrictamente que este resultado específico NO se haya enviado antes
+                if clave not in resultados_enviados:
                   item_dict = {
                       "loteria": nombre_loteria,
                       "hora": hora_sorteo,
