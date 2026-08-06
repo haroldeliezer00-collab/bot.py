@@ -21,8 +21,9 @@ bot = telebot.TeleBot(TOKEN)
 scheduler = BackgroundScheduler(timezone="America/Caracas")
 app = Flask(__name__)
 
-# Memoria estricta para evitar duplicados en todo el día
+# Memoria y control de escaneo inicial para evitar reenvíos al reiniciar
 enviados_set = set()
+initial_scan_done = False
 ultimas_claves_piramide = []
 
 # Única fuente oficial establecida: Win Big
@@ -56,7 +57,7 @@ def obtener_tasa_bcv():
 
 def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
   """Valida rigurosamente que el resultado sea limpio, nuevo y pertenezca a su respectiva lotería."""
-  global enviados_set
+  global enviados_set, initial_scan_done
 
   u_loteria = nombre_loteria.upper().strip()
   u_detalle = detalle_resultado.upper().strip()
@@ -83,11 +84,15 @@ def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
   if "-" not in detalle_resultado:
     return
 
-  # Clave única absoluta por Lotería + Hora + Resultado exacto para evitar reenvíos
+  # Clave única absoluta por Lotería + Hora + Resultado exacto
   clave_unica = f"{u_loteria}_{u_hora}_{u_detalle}"
 
   if clave_unica not in enviados_set:
     enviados_set.add(clave_unica)
+    # Si todavía estamos en el escaneo inicial al arrancar, solo lo guardamos en memoria sin enviar
+    if not initial_scan_done:
+      return
+
     mensaje = (
         "🎯 AGENCIA HAROLD JOSE 🎯\n\n"
         f"{u_loteria}\n"
@@ -222,13 +227,13 @@ def tarea_fin_jornada():
 
 
 def verificar_resultados():
+  global initial_scan_done
   headers = {"User-Agent": "Mozilla/5.0"}
   try:
     resp = requests.get(URL_WINBIG, headers=headers, verify=False, timeout=10)
     if resp.status_code == 200:
       soup = BeautifulSoup(resp.text, "html.parser")
 
-      # Buscamos cada tarjeta individual contenedora de cada lotería en la página
       boxes = soup.find_all(["div", "section", "article"])
 
       for box in boxes:
@@ -238,27 +243,33 @@ def verificar_resultados():
         ):
           parts = [p.strip() for p in box_text.split("|") if p.strip()]
 
-          # Extraer el nombre real de la lotería omitiendo números, horas y palabras clave técnicas
+          # Extraer el nombre real de la lotería omitiendo etiquetas no deseadas (como PATRONUS)
           nombre_lote = ""
+          exclusiones = [
+              "PATRONUS",
+              "WIN BIG",
+              "RESULTADOS",
+              "PENDIENTE",
+              "PRÓXIMO",
+              "RULETA ROYAL",
+          ]
+
           for p in parts:
             p_up = p.upper()
-            if (
-                p.isdigit()
-                or "AM" in p_up
-                or "PM" in p_up
-                or "PENDIENTE" in p_up
-                or "PRÓXIMO" in p_up
-                or "-" in p
-            ):
+            if any(exc in p_up for exc in exclusiones):
               continue
-            if len(p) > 2 and "WIN BIG" not in p_up:
+            if p.isdigit() or len(p) <= 2 or "-" in p:
+              continue
+            if "AM" in p_up or "PM" in p_up:
+              break
+            if len(p) >= 3:
               nombre_lote = p
               break
 
           if not nombre_lote or "RULETA ROYAL" in nombre_lote.upper():
             continue
 
-          # Recorremos buscando los bloques de hora y resultado dentro de esta misma caja
+          # Recorrer buscando los bloques de hora y resultado dentro de esta caja
           i = 0
           while i < len(parts) - 1:
             item = parts[i]
@@ -277,6 +288,15 @@ def verificar_resultados():
               i += 2
             else:
               i += 1
+
+      # Marcar el escaneo inicial como completado después de la primera pasada exitosa
+      if not initial_scan_done:
+        initial_scan_done = True
+        print(
+            "Escaneo inicial completado. A partir de ahora solo se enviarán"
+            " resultados nuevos."
+        )
+
   except Exception as e:
     print(f"Error escaneando WinBig: {e}")
 
