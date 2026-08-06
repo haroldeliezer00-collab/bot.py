@@ -34,29 +34,55 @@ scheduler = BackgroundScheduler(timezone="America/Caracas")
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
 
-# Enlaces oficiales adicionales para respaldo/verificación
-ENLACES_OFICIALES = {
-    "LOTTO ACTIVO": "https://www.lottoactivo.com/resultados/lotto_activo/",
-    "GUACHARO ACTIVO": "https://www.guacharoactivo.com.ve/resultados",
-    "LOTO CHAIMA": "https://lotochaima.com/",
-    "LA GRANJITA": "https://lagranjitaonline.com/",
-    "SELVA PLUS": "https://www.selvaplus.com/resultados",
-    "MONJE MILLONARIO": (
-        "https://www.lottoactivo.com/resultados/lottoactivo2(monjemillonario)/"
-    ),
-    "LOTTO ACTIVO RD INTERNACIONAL": (
-        "https://www.lottoactivo.com/resultados/lotto_activo_internacional/"
-    ),
-    "GUACA ACTIVA": "https://lotery.winbigvzla.com/resultados",
-    "MEGA GUACA": "https://lotery.winbigvzla.com/resultados",
-    "EL GUACHARITO MILLONARIO": "https://elguacharitomillonario.com/",
-}
+# Listado oficial de loterías ordenadas de mayor a menor longitud
+LOTERIAS_VALIDAS = sorted(
+    [
+        "LOTTO ACTIVO RD INT",
+        "LOTTO ACTIVO RDOMINICANA",
+        "EL GUACHARITO MILLONARIO",
+        "ZOOLOGICO ACTIVO",
+        "GRANJA MILLONARIA",
+        "CENTENA ANIMAL",
+        "GUACHARO ACTIVO",
+        "CHANCE ANIMAL",
+        "RULETON VENEZUELA",
+        "RULETON COLOMBIA",
+        "LOTTO LA QUINTA",
+        "GRANJITA PLUS",
+        "MONJE MILLONARIO",
+        "LOTO ANIMALITO",
+        "LOTTO PANTERA",
+        "RULETON PERU",
+        "LA RICACHONA",
+        "CENTENA PLUS",
+        "LOTTO ACTIVO",
+        "LA GRANJITA",
+        "SELVA PLUS",
+        "CONDOR GANA",
+        "LOTTO CHAIMA",
+        "CAZALOTON",
+        "TROPI GANA",
+        "FRUITAGANA",
+        "GRANJAZO",
+        "PANDA PLUS",
+        "MEGA ANIMAL",
+        "LOTTO GATO",
+        "GATAZO",
+        "GUACA ACTIVA",
+        "LOTTO REAL",
+        "LOTTOMAX",
+        "CALAMAR A",
+        "CALAMAR B",
+        "MEGA GUACA",
+    ],
+    key=len,
+    reverse=True,
+)
 
 resultados_enviados = set()
 primera_ejecucion = True
 ultima_hora_polla = None
 
-# Variable de control para el mensaje de taquilla activado por imagen con texto "Taquilla activa"
 taquilla_activa_hoy = False
 imagen_taquilla_file_id = None
 caption_taquilla = (
@@ -74,7 +100,6 @@ caption_taquilla = (
     "¡Mucho éxito en la jornada de hoy! 🍀✨"
 )
 
-# Encabezado exacto para resultados programados / manuales
 HEADER_RESULTADOS = (
     "AGENCIA HAROLD JOSE\n"
     "SEGURIDAD Y CONFIANZA\n"
@@ -114,7 +139,6 @@ def home():
   )
 
 
-# --- RUTAS DE PRUEBA MANUAL (TESTS) ---
 @app.route("/test/madrugada")
 def test_madrugada():
   enviar_saludo_madrugada()
@@ -172,7 +196,6 @@ def test_resultados():
 def test_cierre():
   enviar_mensaje_cierre()
   return "Prueba de Cierre de Jornada ejecutada."
-# ---------------------------------------
 
 
 def limpiar_texto(texto):
@@ -410,7 +433,6 @@ def enviar_mensaje_cierre():
   taquilla_activa_hoy = False
 
 
-# ================= VERIFICACIÓN AUTOMÁTICA ROBUSTA (CADA 30 SEGUNDOS) =================
 def verificar_resultados():
   global resultados_enviados, primera_ejecucion
   try:
@@ -470,7 +492,6 @@ def verificar_resultados():
       if not nombre_loteria or len(nombre_loteria) > 40:
         continue
 
-      # Limpiar caracteres especiales para dejar un solo emoji limpio
       nombre_loteria = re.sub(r"^[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+", "", nombre_loteria)
       nombre_loteria = limpiar_texto(nombre_loteria)
       if not nombre_loteria:
@@ -540,7 +561,6 @@ def verificar_resultados():
     print(f"⚠️ Error en resultados: {e}")
 
 
-# --- MANEJADOR DE TAQUILLA ACTIVA ---
 def procesar_activacion_taquilla(message):
   global taquilla_activa_hoy, imagen_taquilla_file_id
   caption = message.caption or message.text or ""
@@ -580,7 +600,6 @@ def handle_text_messages(message):
     print("✅ Taquilla activada por texto.")
 
 
-# --- MANEJADOR DE RESULTADOS PROGRAMADOS / ANIMALITOS ---
 def procesar_limpieza_y_envio_animalitos(text):
   texto_lower = text.lower()
   if (
@@ -611,4 +630,11 @@ def handle_channel_posts(message):
     func=lambda message: True, content_types=["text"]
 )
 def handle_direct_messages_animalitos(message):
-  te
+  text = message.text or ""
+  procesar_limpieza_y_envio_animalitos(text)
+
+
+def iniciar_scheduler():
+  scheduler.add_job(limpiar_memoria_diaria, "cron", hour=0, minute=0)
+  scheduler.add_job(enviar_saludo_madrugada, "cron", hour=6, minute=30)
+  scheduler.add_job(envia
