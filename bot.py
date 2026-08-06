@@ -1,6 +1,6 @@
-import os
 import time
 import random
+import re
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
@@ -37,7 +37,7 @@ PAGINAS_OFICIALES = {
     "TRIPLE GUACA37": "https://www.guacaactiva.com/"
 }
 
-# ================= FUNCIONES DE SCRAPING Y DATOS =================
+# ================= FUNCIONES DE VALIDACIÓN Y SCRAPING =================
 
 def obtener_tasa_bcv():
     try:
@@ -53,65 +53,77 @@ def obtener_tasa_bcv():
                     return strong.text.strip().replace(',', '.')
     except Exception as e:
         print(f"Error al obtener tasa BCV: {e}")
-    return "742,23"  # Valor por defecto según ejemplo
+    return "742,23"
+
+def es_resultado_valido(texto):
+    """Filtra estrictamente para descartar horas vacías, estados pendientes o texto basura."""
+    t_upper = texto.upper()
+    
+    # Excluir explícitamente palabras clave de estados no jugados o pendientes
+    palabras_prohibidas = ["PENDIENTE", "PRÓXIMO", "PROXIMO", "CIERRE", "JUEGA", "SORTEO", "RULETA ROYAL"]
+    if any(p in t_upper for p in palabras_prohibidas):
+        return False
+        
+    # El resultado real debe contener un formato de hora (AM/PM) y algún indicador numérico/guión del animalito
+    if not any(h in t_upper for h in ["AM", "PM"]):
+        return False
+        
+    # Debe tener una longitud lógica para un resultado (ej: "07:15 PM 79 - GUSANO")
+    if len(texto) < 5 or len(texto) > 80:
+        return False
+        
+    return True
 
 def verificar_resultados():
-    """Revisa las páginas cada 30 segundos, omitiendo RULETA ROYAL y aplicando doble verificación."""
+    """Revisa las páginas cada 30 segundos, ignorando pendientes y validando resultados reales."""
     global enviados_set
     headers = {'User-Agent': 'Mozilla/5.0'}
 
-    # 1. Revisar Win Big / Resultados365 / Generales
     general_urls = ["https://lotery.winbigvzla.com/resultados", "https://resultados365.com/"]
     for url in general_urls:
         try:
             resp = requests.get(url, headers=headers, verify=False, timeout=10)
             if resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, 'html.parser')
-                # Lógica adaptativa de extracción de texto/bloques de resultados
-                # Se busca excluir explícitamente "RULETA ROYAL"
-                for item in soup.find_all(['div', 'li', 'tr', 'p']):
+                for item in soup.find_all(['div', 'li', 'tr', 'p', 'span']):
                     texto = item.get_text(separator=" ", strip=True)
-                    if "RULETA ROYAL" in texto.upper():
-                        continue  # Omitir Ruleta Royal
                     
-                    # Ejemplo de identificación y envío si es un resultado nuevo válido
-                    # (Identificador único basado en contenido de texto)
-                    if any(hora in texto for hora in ["AM", "PM", ":"]):
-                        identificador = f"{url}_{texto}"
-                        if identificador not in enviados_set and len(texto) < 100:
-                            enviados_set.add(identificador)
-                            # Formato requerido para cada resultado individual
-                            mensaje_resultado = (
-                                "🎯 AG HAROLD JOSE 🎯\n\n"
-                                f"{texto}\n"
-                                "https://t.me/resultadosagharoldjose"
-                            )
-                            bot.send_message(TEST_CHANNEL, mensaje_resultado)
+                    if not es_resultado_valido(texto):
+                        continue
+                    
+                    identificador = f"{url}_{texto}"
+                    if identificador not in enviados_set:
+                        enviados_set.add(identificador)
+                        mensaje_resultado = (
+                            "🎯 AG HAROLD JOSE 🎯\n\n"
+                            f"{texto}\n"
+                            "https://t.me/resultadosagharoldjose"
+                        )
+                        bot.send_message(TEST_CHANNEL, mensaje_resultado)
         except Exception as e:
             print(f"Error escaneando {url}: {e}")
 
-    # 2. Revisión de páginas oficiales con doble verificación
     for loteria, url_oficial in PAGINAS_OFICIALES.items():
         try:
             resp = requests.get(url_oficial, headers=headers, verify=False, timeout=10)
             if resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, 'html.parser')
-                for block in soup.find_all(['div', 'span', 'td', 'p']):
+                for block in soup.find_all(['div', 'span', 'td', 'p', 'li']):
                     txt = block.get_text(separator=" ", strip=True)
-                    if len(txt) > 5 and ("AM" in txt or "PM" in txt or ":" in txt):
-                        if "RULETA ROYAL" in txt.upper():
-                            continue
+                    
+                    if not es_resultado_valido(txt):
+                        continue
                         
-                        id_oficial = f"{loteria}_{txt}"
-                        if id_oficial not in enviados_set:
-                            enviados_set.add(id_oficial)
-                            mensaje_oficial = (
-                                "🎯 AG HAROLD JOSE 🎯\n\n"
-                                f"{loteria}\n"
-                                f"{txt}\n"
-                                "https://t.me/resultadosagharoldjose"
-                            )
-                            bot.send_message(TEST_CHANNEL, mensaje_oficial)
+                    id_oficial = f"{loteria}_{txt}"
+                    if id_oficial not in enviados_set:
+                        enviados_set.add(id_oficial)
+                        mensaje_oficial = (
+                            "🎯 AG HAROLD JOSE 🎯\n\n"
+                            f"{loteria}\n"
+                            f"{txt}\n"
+                            "https://t.me/resultadosagharoldjose"
+                        )
+                        bot.send_message(TEST_CHANNEL, mensaje_oficial)
         except Exception as e:
             print(f"Error en oficial {loteria}: {e}")
 
@@ -211,7 +223,6 @@ def tarea_pollas():
 def escuchar_canales(message):
     texto = message.text or message.caption or ""
     
-    # 1. Palabra clave: TAQUILLA ACTIVA
     if "TAQUILLA ACTIVA" in texto.upper():
         respuesta_activa = (
             "✅ AG HAROLD JOSÉ ACTIVA ✅\n"
@@ -228,7 +239,6 @@ def escuchar_canales(message):
         )
         bot.send_message(TEST_CHANNEL, respuesta_activa)
 
-    # 2. Palabra clave: 📊 RESULTADO PROGRAMADO
     if "📊 RESULTADO PROGRAMADO" in texto:
         partes = texto.split("📊 RESULTADO PROGRAMADO")
         if len(partes) > 1:
@@ -243,26 +253,18 @@ def escuchar_canales(message):
             )
             bot.send_message(TEST_CHANNEL, respuesta_programada)
 
-# ================= CONFIGURACIÓN DE CRONOGRAMA (SCHEDULER) =================
+# ================= CONFIGURACIÓN DE CRONOGRAMA =================
 
-# 6:30 AM - Buenos días
 scheduler.add_job(tarea_buenos_dias, 'cron', hour=6, minute=30)
-# 6:31 AM - Pirámide numérica
 scheduler.add_job(tarea_piramide, 'cron', hour=6, minute=31)
-# 6:30 AM y 6:30 PM - Tasa BCV
 scheduler.add_job(tarea_bcv, 'cron', hour=6, minute=30)
 scheduler.add_job(tarea_bcv, 'cron', hour=18, minute=30)
-# 7:00 AM - Saludo institucional
 scheduler.add_job(tarea_saludo_7am, 'cron', hour=7, minute=0)
-# 10:00 AM, 2:00 PM, 5:00 PM - Avisos importantes
 scheduler.add_job(tarea_aviso_importante, 'cron', hour=10, minute=0)
 scheduler.add_job(tarea_aviso_importante, 'cron', hour=14, minute=0)
 scheduler.add_job(tarea_aviso_importante, 'cron', hour=17, minute=0)
-# 9:10 PM - Final de jornada
 scheduler.add_job(tarea_fin_jornada, 'cron', hour=21, minute=10)
-# Minuto 10 de cada hora entre 7 AM y 6 PM - Recordatorio de pollas
 scheduler.add_job(tarea_pollas, 'cron', hour='7-18', minute=10)
-# Revisión continua de resultados cada 30 segundos
 scheduler.add_job(verificar_resultados, 'interval', seconds=30)
 
 if __name__ == "__main__":
