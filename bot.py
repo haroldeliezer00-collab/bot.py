@@ -4,6 +4,7 @@ import random
 import re
 from threading import Thread
 import time
+from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
 from flask import Flask
 import requests
@@ -27,6 +28,7 @@ ENLACE_CANAL = "https://t.me/resultadosagharoldjose"
 ENLACE_POLLAS = "https://t.me/pollasydupletas"
 
 bot = telebot.TeleBot(TOKEN)
+scheduler = BackgroundScheduler(timezone="America/Caracas")
 
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
@@ -391,14 +393,15 @@ def reiniciar_activacion_diaria():
 
 
 def tarea_minuto_diez():
-  enviar_telegram(
-      "🎯 AGENCIA HAROLD JOSE 🎯\n\n"
-      "📢 ¡Pollas actualizadas!\n"
-      f"Puedes verlas aquí 👇🏻\n"
-      f"{ENLACE_POLLAS}\n\n"
-      "¡Mucho éxito! 🍀",
-      disable_web_preview=False,
-  )
+  if 7 <= datetime.now().hour <= 18:
+    enviar_telegram(
+        "🎯 AGENCIA HAROLD JOSE 🎯\n\n"
+        "📢 ¡Pollas actualizadas!\n"
+        f"Puedes verlas aquí 👇🏻\n"
+        f"{ENLACE_POLLAS}\n\n"
+        "¡Mucho éxito! 🍀",
+        disable_web_preview=False,
+    )
 
 
 def enviar_mensaje_cierre():
@@ -586,36 +589,27 @@ def handle_direct_messages_animalitos(message):
   procesar_limpieza_y_envio_animalitos(text)
 # -----------------------------------------------------------------------------
 
-import schedule
 
+def iniciar_scheduler():
+  # Tareas programadas con APScheduler
+  scheduler.add_job(enviar_saludo_madrugada, "cron", hour=6, minute=30)
+  scheduler.add_job(enviar_piramide_diaria, "cron", hour=6, minute=31)
+  scheduler.add_job(enviar_saludo_matutino, "cron", hour=7, minute=0)
 
-def loop_bot():
+  scheduler.add_job(enviar_tasa_dolar, "cron", hour=6, minute=30)
+  scheduler.add_job(enviar_tasa_dolar, "cron", hour=18, minute=30)
+
+  scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
+  scheduler.add_job(reiniciar_activacion_diaria, "cron", hour=5, minute=0)
+
+  scheduler.add_job(tarea_minuto_diez, "cron", hour="7-18", minute=10)
+  scheduler.add_job(enviar_mensaje_cierre, "cron", hour=21, minute=10)
+
+  # Verificación de resultados exactamente cada 30 segundos
+  scheduler.add_job(verificar_resultados, "interval", seconds=30)
+
+  scheduler.start()
   verificar_resultados()
-
-  schedule.every().day.at("06:30").do(enviar_saludo_madrugada)
-  schedule.every().day.at("06:31").do(enviar_piramide_diaria)
-  schedule.every().day.at("07:00").do(enviar_saludo_matutino)
-
-  schedule.every().day.at("06:30").do(enviar_tasa_dolar)
-  schedule.every().day.at("18:30").do(enviar_tasa_dolar)
-
-  schedule.every().day.at("15:00").do(tarea_envio_programado_taquilla)
-  schedule.every().day.at("05:00").do(reiniciar_activacion_diaria)
-
-  schedule.every().hour.at(":10").do(
-      lambda: tarea_minuto_diez() if 7 <= datetime.now().hour <= 18 else None
-  )
-  schedule.every().day.at("21:10").do(enviar_mensaje_cierre)
-
-  # Verificación de resultados exactamente cada 30 segundos como solicitaste
-  schedule.every(30).seconds.do(verificar_resultados)
-
-  while True:
-    try:
-      schedule.run_pending()
-    except Exception as e:
-      print(f"Error en schedule: {e}")
-    time.sleep(1)
 
 
 def iniciar_polling_bot():
@@ -637,9 +631,9 @@ def iniciar_polling_bot():
       time.sleep(5)
 
 
-# Inicialización de hilos en segundo plano
+# Inicialización segura de hilos en segundo plano
 try:
-  t_schedule = Thread(target=loop_bot)
+  t_schedule = Thread(target=iniciar_scheduler)
   t_schedule.daemon = True
   t_schedule.start()
 
@@ -652,4 +646,4 @@ except Exception as e:
 
 if __name__ == "__main__":
   port = int(os.environ.get("PORT", 5000))
-  app.run(host="0.0.0.0", port=port)
+  app.run(host="0.0.0.0", port=port, use_reloader=False)
