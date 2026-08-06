@@ -33,7 +33,7 @@ scheduler = BackgroundScheduler(timezone="America/Caracas")
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
 
-# Listado oficial de loterías (ordenadas de mayor a menor longitud para evitar conflictos de subcadenas)
+# Listado oficial de loterías ordenadas de mayor a menor longitud para evitar cruces
 LOTERIAS_VALIDAS = sorted(
     [
         "LOTTO ACTIVO RD INT",
@@ -421,7 +421,7 @@ def enviar_mensaje_cierre():
   taquilla_activa_hoy = False
 
 
-# ================= VERIFICACIÓN PRECISA Y ANTI-DUPLICADOS =================
+# ================= VERIFICACIÓN PRECISA Y ANTI-DUPLICADOS (CADA 30 SEGUNDOS) =================
 def verificar_resultados():
   global resultados_enviados, primera_ejecucion
   try:
@@ -432,88 +432,74 @@ def verificar_resultados():
 
     soup = BeautifulSoup(respuesta.text, "html.parser")
     
-    # Buscar todas las posibles tarjetas o contenedores de resultados
-    tarjetas_candidatas = soup.find_all(
+    # Buscar elementos de tarjeta de forma amplia sin filtros restrictivos previos
+    tarjetas = soup.find_all(
         ["div", "article", "section"],
-        class_=re.compile(r"card|box|item|lotto|result|panel", re.IGNORECASE),
+        class_=re.compile(r"card|box|item|lotto|result|panel|col", re.IGNORECASE),
     )
-    if not tarjetas_candidatas:
-      tarjetas_candidatas = soup.find_all(["div", "section"])
-
-    # FILTRO CLAVE: Quedarnos únicamente con las tarjetas "hoja" (las más internas)
-    # para evitar que se escanee el contenedor padre y sus hijos repetidas veces.
-    tarjetas = []
-    for t in tarjetas_candidatas:
-      tiene_hijos_tarjeta = any(
-          h in t.find_all(True) for h in tarjetas_candidatas if h != t
-      )
-      if not tiene_hijos_tarjeta:
-        tarjetas.append(t)
-
     if not tarjetas:
-      tarjetas = tarjetas_candidatas
+      tarjetas = soup.find_all(["div", "section"])
 
     nuevos_encontrados = []
 
     for tarjeta in tarjetas:
-      texto_tarjeta = tarjeta.get_text(" ", strip=True).upper()
+      texto_tarjeta = tarjeta.get_text(" | ", strip=True).upper()
 
       # Identificar con precisión el nombre oficial de esta tarjeta
       nombre_loteria = None
       for loteria_valida in LOTERIAS_VALIDAS:
-        if loteria_valida in texto_tarjeta:
+        # Validar como palabra/bloque completo o coincidencia directa al inicio
+        if loteria_valida == texto_tarjeta or loteria_valida in texto_tarjeta.split(" | "):
+          nombre_loteria = loteria_valida
+          break
+        # Búsqueda segura si el título está contenido pero no es subcadena de otro
+        elif f" {loteria_valida} " in f" {texto_tarjeta} ":
           nombre_loteria = loteria_valida
           break
 
       if not nombre_loteria or "RULETA ROYAL" in nombre_loteria:
         continue
 
-      # Buscar los slots de horas dentro de esta tarjeta específica
-      slots = tarjeta.find_all(
-          ["div", "li", "span", "tr", "p"],
-          class_=re.compile(r"item|slot|draw|row|col", re.IGNORECASE),
-      )
-      if not slots:
-        slots = [tarjeta]
+      # Extraer todas las líneas o bloques internos de la tarjeta
+      partes = [p.strip() for p in texto_tarjeta.split(" | ") if p.strip()]
+      
+      i = 0
+      while i < len(partes) - 1:
+        item = partes[i]
+        item_up = item.upper()
+        if "AM" in item_up or "PM" in item_up:
+          hora_sorteo = item
+          if i + 1 < len(partes):
+            res_sorteo = partes[i + 1]
+            if "-" in res_sorteo and not any(
+                w in res_sorteo.upper()
+                for w in ["PENDIENTE", "PRÓXIMO", "PROXIMO", "EN ESPERA", "CIERRE"]
+            ):
+              resultado_limpio = limpiar_texto(res_sorteo).upper()
+              
+              # Clave única absoluta por Lotería + Hora + Resultado exacto
+              clave = (nombre_loteria, hora_sorteo, resultado_limpio)
 
-      for slot in slots:
-        texto_slot = slot.get_text(" ", strip=True).upper()
-        if (
-            "PENDIENTE" in texto_slot
-            or "PRÓXIMO" in texto_slot
-            or "EN ESPERA" in texto_slot
-        ):
-          continue
-
-        match_h = re.search(r"(\d{1,2}:\d{2}\s*(?:AM|PM))", texto_slot)
-        if not match_h:
-          continue
-        hora = match_h.group(1).upper()
-
-        match_res = re.search(
-            r"(\d{1,2}\s-\s[A-ZÁÉÍÓÚÑa-zñáéíóú]+(?:\s+[A-ZÁÉÍÓÚÑa-zñáéíóú]+)?)",
-            texto_slot,
-        )
-        if not match_res:
-          continue
-
-        resultado_crudo = limpiar_texto(match_res.group(1)).upper()
-        
-        # Clave única por lotería y hora exacta
-        clave = (nombre_loteria, hora)
-
-        if primera_ejecucion:
-          resultados_enviados.add(clave)
+              if primera_ejecucion:
+                resultados_enviados.add(clave)
+              else:
+                if clave not in resultados_enviados:
+                  # Asegurar que no se haya enviado ya esta hora para esta lotería específica
+                  ya_enviado_esta_hora = any(
+                      c[0] == nombre_loteria and c[1] == hora_sorteo for c in resultados_enviados
+                  )
+                  if not ya_enviado_esta_hora:
+                    item_dict = {
+                        "loteria": nombre_loteria,
+                        "hora": hora_sorteo,
+                        "resultado": resultado_limpio,
+                    }
+                    if item_dict not in nuevos_encontrados:
+                      nuevos_encontrados.append(item_dict)
+                      resultados_enviados.add(clave)
+          i += 2
         else:
-          if clave not in resultados_enviados:
-            item_dict = {
-                "loteria": nombre_loteria,
-                "hora": hora,
-                "resultado": resultado_crudo,
-            }
-            if item_dict not in nuevos_encontrados:
-              nuevos_encontrados.append(item_dict)
-              resultados_enviados.add(clave)
+          i += 1
 
     if primera_ejecucion:
       primera_ejecucion = False
