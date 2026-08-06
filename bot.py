@@ -10,18 +10,19 @@ import requests
 import telebot
 import urllib3
 
-# Desactivar advertencias SSL para scraping fluido
+# Desactivar advertencias SSL para scraping seguro
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= CONFIGURACIÓN =================
-TOKEN = "8698848083:AAHyJHdx6ZfnuQ9qjF7_lupAxsjEahP7nqU"
-TEST_CHANNEL = "@pruebajsj"  # Canal de pruebas indicado
+TOKEN = "8728747633:AAHakMFznhlpK6QbkZinctgbl131wE2hIeI"
+TEST_CHANNEL = "@pruebajsj"  # Canal de pruebas configurado
 
 bot = telebot.TeleBot(TOKEN)
-scheduler = BackgroundScheduler()
+# Zona horaria de Venezuela para que los cronogramas sincronicen de forma exacta
+scheduler = BackgroundScheduler(timezone="America/Caracas")
 app = Flask(__name__)
 
-# Memoria para evitar duplicados y spam de resultados
+# Control de duplicados y memoria diaria
 enviados_set = set()
 ultimas_claves_piramide = []
 
@@ -48,10 +49,7 @@ PAGINAS_OFICIALES = {
 
 @app.route("/")
 def health_check():
-  return (
-      "Bot de Agencia Harold José operando correctamente con servidor web.",
-      200,
-  )
+  return "Bot Agencia Harold José 3.0 activo y operando correctamente.", 200
 
 
 # ================= FUNCIONES AUXILIARES =================
@@ -76,6 +74,7 @@ def obtener_tasa_bcv():
 
 def es_resultado_valido(texto):
   t_upper = texto.upper()
+  # Excluir pendientes, cierres y RULETA ROYAL
   palabras_prohibidas = [
       "PENDIENTE",
       "PRÓXIMO",
@@ -102,8 +101,8 @@ def es_resultado_valido(texto):
 def tarea_buenos_dias():
   msg = (
       "🌅 ¡Buenos días a todos! 🌅\n\n"
-      "Arrancamos el día con la mejor energía y bendiciones. ¡A asegurar las"
-      " mejores jugadas con nosotros! 🍀✨"
+      "Que este nuevo día llegue cargado de la mejor energía, bendiciones y"
+      " muchas jugadas ganadoras. ¡A triunfar con nosotros! 🍀✨"
   )
   bot.send_message(TEST_CHANNEL, msg)
 
@@ -112,8 +111,7 @@ def tarea_piramide():
   global ultimas_claves_piramide
   today = datetime.now().strftime("%d/%m/%Y")
 
-  # Generar claves dinámicas en rango 0-00 hasta 36 asegurando que no se repitan respecto al día anterior
-  posibles = [
+  posibles_datos = [
       "25-13-07",
       "35-20-02",
       "12-00-18",
@@ -121,14 +119,12 @@ def tarea_piramide():
       "19-01-33",
       "08-00-24",
   ]
-  datos_nuevos = random.choice(posibles)
+  datos_nuevos = random.choice(posibles_datos)
   while datos_nuevos in ultimas_claves_piramide:
-    datos_nuevos = random.choice(posibles)
+    datos_nuevos = random.choice(posibles_datos)
   ultimas_claves_piramide = [datos_nuevos]
 
-  partes = datos_nuevos.split("-")
-  d1, d2, d3 = partes[0], partes[1], partes[2]
-
+  p = datos_nuevos.split("-")
   piramide_art = (
       "🎯 CENTRO DE APUESTAS HAROLD JOSÉ 🎯\n"
       "📢 REPORTE - LA PIRÁMIDE DE HOY 📢\n\n"
@@ -144,8 +140,8 @@ def tarea_piramide():
       "...............  4  8  .......\n"
       ".................  2  .................\n\n"
       "🔥 DATOS CLAVES PARA HOY:\n"
-      f"📌 {d1}-{d2}-{d3}\n"
-      f"📌 {d3}-{d1}-{d2}\n\n"
+      f"📌 {p[0]}-{p[1]}-{p[2]}\n"
+      f"📌 {p[2]}-{p[0]}-{p[1]}\n\n"
       "⚡ ¡La precisión y los números hablan por sí solos! ¡Juega con confianza y"
       " gana con nosotros! 🍀 💰"
   )
@@ -221,14 +217,13 @@ def tarea_fin_jornada():
   bot.send_message(TEST_CHANNEL, msg)
 
 
-# ================= SCRAPING DE RESULTADOS CADA 30 SEGUNDOS =================
+# ================= SCRAPING AUTOMÁTICO CADA 30 SEGUNDOS =================
 
 
 def verificar_resultados():
   global enviados_set
   headers = {"User-Agent": "Mozilla/5.0"}
 
-  # 1. Sitios generales (Winbig y Resultados365)
   general_urls = [
       "https://lotery.winbigvzla.com/resultados",
       "https://resultados365.com/",
@@ -255,7 +250,6 @@ def verificar_resultados():
     except Exception as e:
       print(f"Error escaneando {url}: {e}")
 
-  # 2. Páginas oficiales individuales con doble verificación
   for loteria, url_oficial in PAGINAS_OFICIALES.items():
     try:
       resp = requests.get(url_oficial, headers=headers, verify=False, timeout=10)
@@ -280,14 +274,14 @@ def verificar_resultados():
       print(f"Error en oficial {loteria}: {e}")
 
 
-# ================= MANEJADOR DE MENSAJES Y PALABRAS CLAVE =================
+# ================= MANEJADOR DE CANALES PRIVADOS =================
 
 
 @bot.message_handler(func=lambda message: True)
 def escuchar_canales(message):
   texto = message.text or message.caption or ""
 
-  # Palabra clave: TAQUILLA ACTIVA (Canal privado 1)
+  # Canal Privado 1: TAQUILLA ACTIVA
   if "TAQUILLA ACTIVA" in texto.upper():
     respuesta_activa = (
         "✅ AG HAROLD JOSÉ ACTIVA ✅\n"
@@ -305,7 +299,7 @@ def escuchar_canales(message):
     )
     bot.send_message(TEST_CHANNEL, respuesta_activa)
 
-  # Palabra clave: 📊 RESULTADO PROGRAMADO (Canal privado 2)
+  # Canal Privado 2: RESULTADO PROGRAMADO
   if "📊 RESULTADO PROGRAMADO" in texto:
     partes = texto.split("📊 RESULTADO PROGRAMADO")
     if len(partes) > 1:
@@ -321,7 +315,7 @@ def escuchar_canales(message):
       bot.send_message(TEST_CHANNEL, respuesta_programada)
 
 
-# ================= CONFIGURACIÓN DE CRONOGRAMA =================
+# ================= ASIGNACIÓN DE CRONOGRAMAS =================
 
 scheduler.add_job(tarea_buenos_dias, "cron", hour=6, minute=30)
 scheduler.add_job(tarea_piramide, "cron", hour=6, minute=31)
@@ -332,16 +326,25 @@ scheduler.add_job(tarea_aviso_importante, "cron", hour=10, minute=0)
 scheduler.add_job(tarea_aviso_importante, "cron", hour=14, minute=0)
 scheduler.add_job(tarea_aviso_importante, "cron", hour=17, minute=0)
 scheduler.add_job(tarea_fin_jornada, "cron", hour=21, minute=10)
+# Minuto 10 de cada hora desde las 7 AM hasta las 6 PM
 scheduler.add_job(tarea_pollas, "cron", hour="7-18", minute=10)
+# Verificación de resultados cada 30 segundos
 scheduler.add_job(verificar_resultados, "interval", seconds=30)
 
 if __name__ == "__main__":
   scheduler.start()
   print("Bot de Agencia Harold José iniciado correctamente...")
 
-  # Hilo para ejecutar el bot de Telegram en paralelo con Flask
+
   def run_bot():
-    bot.infinity_polling(skip_pending=True)
+    try:
+      # Limpiamos webhooks colgados en Telegram para evitar conflictos de doble instancia (Error 409)
+      bot.remove_webhook()
+      time.sleep(1)
+      bot.infinity_polling(skip_pending=True)
+    except Exception as e:
+      print(f"Error en el polling del bot: {e}")
+
 
   t = threading.Thread(target=run_bot, daemon=True)
   t.start()
