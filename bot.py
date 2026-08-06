@@ -504,8 +504,7 @@ def verificar_resultados():
             res_sorteo = partes[i + 1]
             if "-" in res_sorteo and not any(
                 w in res_sorteo.upper()
-                for w:
-                in [
+                for w in [
                     "PENDIENTE",
                     "PRÓXIMO",
                     "PROXIMO",
@@ -539,7 +538,6 @@ def verificar_resultados():
 
     if nuevos_encontrados:
       for item_nuevo in nuevos_encontrados:
-        # Formato exacto con un solo emoji de diana arriba, un solo emoji de lotería y la firma limpia del canal abajo
         mensaje = (
             "🎯 AGENCIA HAROLD JOSE 🎯\n\n"
             f"🎰 {item_nuevo['loteria']}\n"
@@ -600,7 +598,6 @@ def procesar_limpieza_y_envio_animalitos(text):
       "resultado programado" in texto_lower
       or "resultados animalitos" in texto_lower
   ):
-    # Buscar el punto de corte clave
     clave_corte = (
         "resultados animalitos"
         if "resultados animalitos" in texto_lower
