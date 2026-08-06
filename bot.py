@@ -59,7 +59,7 @@ TEXTO_TAQUILLA = (
     " rapidez en cada una de todas tus solicitudes.\n\n"
     "📲 Envía tus jugadas:\n"
     "(Comprobante de pago / Lotería / monto / Hora)\n\n"
-    "📖 Consulta nuestro reglamento hier:\n"
+    "📖 Consulta nuestro reglamento aquí:\n"
     "https://wa.me/p/33319103291071105/584124489363\n"
     "🚀 Agiliza tu proceso aquí: https://wa.me/p/24724650613899486/584124489363\n\n"
     "RESULTADOS AUTOMÁTICOS\n"
@@ -336,7 +336,18 @@ def enviar_tasa_dolar():
       if dolar_div:
         strong_elem = dolar_div.find("strong")
         if strong_elem:
-          precio_dolar = strong_elem.get_text(strip=True)
+          raw_precio = strong_elem.get_text(strip=True)
+          # Limpiar y formatear a dos decimales estándar (ej: 755,90)
+          cleaned_num = re.sub(r"[^\d,\.]", "", raw_precio)
+          if "," in cleaned_num:
+            parts = cleaned_num.split(",")
+            if len(parts) == 2 and len(parts[1]) > 2:
+              cleaned_num = f"{parts[0]},{parts[1][:2]}"
+          elif "." in cleaned_num:
+            parts = cleaned_num.split(".")
+            if len(parts) == 2 and len(parts[1]) > 2:
+              cleaned_num = f"{parts[0]},{parts[1][:2]}"
+          precio_dolar = cleaned_num if cleaned_num else raw_precio
 
     mensaje = (
         "💵 TASA OFICIAL BCV 💵\n\n"
@@ -467,7 +478,11 @@ def verificar_resultados():
       if not nombre_loteria or len(nombre_loteria) > 40:
         continue
 
+      # Limpiar caracteres especiales o iconos iniciales para evitar doble emoji
+      nombre_loteria = re.sub(r"^[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+", "", nombre_loteria)
       nombre_loteria = limpiar_texto(nombre_loteria)
+      if not nombre_loteria:
+        continue
 
       slots_sorteo = tarjeta.find_all(
           ["div", "li", "span", "tr"],
