@@ -26,10 +26,10 @@ enviados_set = set()
 initial_scan_done = False
 ultimas_claves_piramide = []
 
-# Fuente oficial única
+# Fuente oficial única establecida
 URL_WINBIG = "https://lotery.winbigvzla.com/resultados"
 
-# Lista oficial de nombres válidos de loterías extraídos de la plataforma
+# Listado oficial exacto de los encabezados de las loterías en Win Big
 LOTERIAS_VALIDAS = [
     "LOTTO ACTIVO",
     "LA GRANJITA",
@@ -68,6 +68,7 @@ LOTERIAS_VALIDAS = [
     "CALAMAR A",
     "CALAMAR B",
     "MEGA GUACA",
+    "RULETA ROYAL",
 ]
 
 
@@ -104,7 +105,6 @@ def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
   u_detalle = detalle_resultado.upper().strip()
   u_hora = hora.upper().strip()
 
-  # Validar que el nombre de la lotería esté en nuestra lista oficial aprobada
   if u_loteria not in LOTERIAS_VALIDAS:
     return
 
@@ -130,7 +130,7 @@ def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
 
   if clave_unica not in enviados_set:
     enviados_set.add(clave_unica)
-    # Si estamos en el escaneo inicial, solo registramos en memoria sin hacer spam al encender
+    # Si estamos en el escaneo inicial, solo registramos en memoria sin hacer spam
     if not initial_scan_done:
       return
 
@@ -264,7 +264,7 @@ def tarea_fin_jornada():
   bot.send_message(TEST_CHANNEL, msg)
 
 
-# ================= SCRAPING PRECISO USANDO EL LISTADO OFICIAL =================
+# ================= SCRAPING POR TARJETAS INDIVIDUALES =================
 
 
 def verificar_resultados():
@@ -274,45 +274,56 @@ def verificar_resultados():
     resp = requests.get(URL_WINBIG, headers=headers, verify=False, timeout=10)
     if resp.status_code == 200:
       soup = BeautifulSoup(resp.text, "html.parser")
-      boxes = soup.find_all(["div", "section", "article"])
+      
+      # Buscamos contenedores/tarjetas en la página
+      cards = soup.find_all(["div", "section", "article"])
 
-      for box in boxes:
-        box_text = box.get_text(separator="|", strip=True)
-        if "-" in box_text and (
-            "AM" in box_text.upper() or "PM" in box_text.upper()
-        ):
-          parts = [p.strip() for p in box_text.split("|") if p.strip()]
+      for card in cards:
+        parts = [p.strip() for p in card.get_text(separator="|", strip=True).split("|") if p.strip()]
+        if not parts:
+          continue
 
-          # Identificar con precisión milimétrica el nombre de la lotería basado exclusivamente en la lista oficial
-          nombre_lote = ""
-          for p in parts:
+        # Identificar con precisión el nombre de la lotería buscando en los primeros elementos de la tarjeta
+        matched_lotto = None
+        for p in parts[:4]:
+          p_up = p.upper()
+          if p_up in LOTERIAS_VALIDAS:
+            matched_lotto = p_up
+            break
+
+        if not matched_lotto:
+          # Búsqueda parcial por si hay texto adicional en el título
+          for p in parts[:3]:
             p_up = p.upper()
-            if p_up in LOTERIAS_VALIDAS:
-              nombre_lote = p_up
+            for l_name in LOTERIAS_VALIDAS:
+              if l_name in p_up:
+                matched_lotto = l_name
+                break
+            if matched_lotto:
               break
 
-          if not nombre_lote:
-            continue
+        if not matched_lotto or matched_lotto == "RULETA ROYAL":
+          continue
 
-          # Recorrer buscando pares de hora y resultado dentro de esta tarjeta
-          i = 0
-          while i < len(parts) - 1:
-            item = parts[i]
-            item_up = item.upper()
-            if "AM" in item_up or "PM" in item_up:
-              hora_sorteo = item
-              if i + 1 < len(parts):
-                res_sorteo = parts[i + 1]
-                if "-" in res_sorteo and not any(
-                    w in res_sorteo.upper()
-                    for w in ["PENDIENTE", "PRÓXIMO", "EN ESPERA"]
-                ):
-                  procesar_y_enviar_resultado(
-                      nombre_lote, hora_sorteo, res_sorteo
-                  )
-              i += 2
-            else:
-              i += 1
+        # Recorrer buscando pares de hora y resultado dentro de esta tarjeta específica
+        i = 0
+        while i < len(parts) - 1:
+          item = parts[i]
+          item_up = item.upper()
+          if "AM" in item_up or "PM" in item_up:
+            hora_sorteo = item
+            if i + 1 < len(parts):
+              res_sorteo = parts[i + 1]
+              if "-" in res_sorteo and not any(
+                  w in res_sorteo.upper()
+                  for w in ["PENDIENTE", "PRÓXIMO", "EN ESPERA"]
+              ):
+                procesar_y_enviar_resultado(
+                    matched_lotto, hora_sorteo, res_sorteo
+                )
+            i += 2
+          else:
+            i += 1
 
       if not initial_scan_done:
         initial_scan_done = True
