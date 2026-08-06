@@ -33,46 +33,50 @@ scheduler = BackgroundScheduler(timezone="America/Caracas")
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
 
-# Listado oficial exacto de loterías permitidas (RULETA ROYAL EXCLUIDA)
-LOTERIAS_VALIDAS = [
-    "LOTTO ACTIVO",
-    "LA GRANJITA",
-    "EL GUACHARITO MILLONARIO",
-    "GUACHARO ACTIVO",
-    "SELVA PLUS",
-    "LOTTO ACTIVO RD INT",
-    "GRANJA MILLONARIA",
-    "CONDOR GANA",
-    "CENTENA ANIMAL",
-    "CENTENA PLUS",
-    "LOTTO ACTIVO RDOMINICANA",
-    "LOTTO CHAIMA",
-    "CAZALOTON",
-    "CHANCE ANIMAL",
-    "LA RICACHONA",
-    "TROPI GANA",
-    "FRUITAGANA",
-    "GRANJITA PLUS",
-    "GRANJAZO",
-    "PANDA PLUS",
-    "MEGA ANIMAL",
-    "MONJE MILLONARIO",
-    "LOTTO GATO",
-    "GATAZO",
-    "ZOOLOGICO ACTIVO",
-    "GUACA ACTIVA",
-    "LOTO ANIMALITO",
-    "LOTTO PANTERA",
-    "LOTTO REAL",
-    "LOTTO LA QUINTA",
-    "RULETON PERU",
-    "LOTTOMAX",
-    "RULETON COLOMBIA",
-    "RULETON VENEZUELA",
-    "CALAMAR A",
-    "CALAMAR B",
-    "MEGA GUACA",
-]
+# Listado oficial de loterías (ordenadas de mayor a menor longitud para evitar conflictos de subcadenas)
+LOTERIAS_VALIDAS = sorted(
+    [
+        "LOTTO ACTIVO RD INT",
+        "LOTTO ACTIVO RDOMINICANA",
+        "EL GUACHARITO MILLONARIO",
+        "ZOOLOGICO ACTIVO",
+        "GRANJA MILLONARIA",
+        "CENTENA ANIMAL",
+        "GUACHARO ACTIVO",
+        "CHANCE ANIMAL",
+        "RULETON VENEZUELA",
+        "RULETON COLOMBIA",
+        "LOTTO LA QUINTA",
+        "GRANJITA PLUS",
+        "MONJE MILLONARIO",
+        "LOTO ANIMALITO",
+        "LOTTO PANTERA",
+        "RULETON PERU",
+        "LA RICACHONA",
+        "CENTENA PLUS",
+        "LOTTO ACTIVO",
+        "LA GRANJITA",
+        "SELVA PLUS",
+        "CONDOR GANA",
+        "LOTTO CHAIMA",
+        "CAZALOTON",
+        "TROPI GANA",
+        "FRUITAGANA",
+        "GRANJAZO",
+        "PANDA PLUS",
+        "MEGA ANIMAL",
+        "LOTTO GATO",
+        "GATAZO",
+        "GUACA ACTIVA",
+        "LOTTO REAL",
+        "LOTTOMAX",
+        "CALAMAR A",
+        "CALAMAR B",
+        "MEGA GUACA",
+    ],
+    key=len,
+    reverse=True,
+)
 
 resultados_enviados = set()
 primera_ejecucion = True
@@ -417,7 +421,7 @@ def enviar_mensaje_cierre():
   taquilla_activa_hoy = False
 
 
-# ================= VERIFICACIÓN PRECISA DE RESULTADOS (CADA 30 SEGUNDOS) =================
+# ================= VERIFICACIÓN PRECISA Y ANTI-DUPLICADOS =================
 def verificar_resultados():
   global resultados_enviados, primera_ejecucion
   try:
@@ -427,12 +431,27 @@ def verificar_resultados():
       return
 
     soup = BeautifulSoup(respuesta.text, "html.parser")
-    tarjetas = soup.find_all(
+    
+    # Buscar todas las posibles tarjetas o contenedores de resultados
+    tarjetas_candidatas = soup.find_all(
         ["div", "article", "section"],
-        class_=re.compile(r"card|box|item|lotto|result", re.IGNORECASE),
+        class_=re.compile(r"card|box|item|lotto|result|panel", re.IGNORECASE),
     )
+    if not tarjetas_candidatas:
+      tarjetas_candidatas = soup.find_all(["div", "section"])
+
+    # FILTRO CLAVE: Quedarnos únicamente con las tarjetas "hoja" (las más internas)
+    # para evitar que se escanee el contenedor padre y sus hijos repetidas veces.
+    tarjetas = []
+    for t in tarjetas_candidatas:
+      tiene_hijos_tarjeta = any(
+          h in t.find_all(True) for h in tarjetas_candidatas if h != t
+      )
+      if not tiene_hijos_tarjeta:
+        tarjetas.append(t)
+
     if not tarjetas:
-      tarjetas = soup.find_all(["div", "section"])
+      tarjetas = tarjetas_candidatas
 
     nuevos_encontrados = []
 
@@ -479,25 +498,22 @@ def verificar_resultados():
           continue
 
         resultado_crudo = limpiar_texto(match_res.group(1)).upper()
-        clave = (nombre_loteria, hora, resultado_crudo)
+        
+        # Clave única por lotería y hora exacta
+        clave = (nombre_loteria, hora)
 
         if primera_ejecucion:
           resultados_enviados.add(clave)
         else:
           if clave not in resultados_enviados:
-            # Validar estrictamente que no se haya enviado ya esta hora para esta lotería
-            ya_enviado_esta_hora = any(
-                c[0] == nombre_loteria and c[1] == hora for c in resultados_enviados
-            )
-            if not ya_enviado_esta_hora:
-              item_dict = {
-                  "loteria": nombre_loteria,
-                  "hora": hora,
-                  "resultado": resultado_crudo,
-              }
-              if item_dict not in nuevos_encontrados:
-                nuevos_encontrados.append(item_dict)
-                resultados_enviados.add(clave)
+            item_dict = {
+                "loteria": nombre_loteria,
+                "hora": hora,
+                "resultado": resultado_crudo,
+            }
+            if item_dict not in nuevos_encontrados:
+              nuevos_encontrados.append(item_dict)
+              resultados_enviados.add(clave)
 
     if primera_ejecucion:
       primera_ejecucion = False
