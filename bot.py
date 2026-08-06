@@ -12,7 +12,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= CONFIGURACIÓN =================
-TOKEN = "TU_TOKEN_DE_TELEGRAM_AQUI"
+TOKEN = "8698848083:AAHyJHdx6ZfnuQ9qjF7_lupAxsjEahP7nqU"
 TEST_CHANNEL = "@pruebajsj"  # Canal de pruebas indicado por el usuario
 
 bot = telebot.TeleBot(TOKEN)
