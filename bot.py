@@ -29,7 +29,7 @@ ultimas_claves_piramide = []
 # Fuente oficial única establecida
 URL_WINBIG = "https://lotery.winbigvzla.com/resultados"
 
-# Listado oficial exacto de los encabezados de las loterías en Win Big
+# Listado oficial exacto de los encabezados de las loterías permitidas (RULETA ROYAL EXCLUIDA)
 LOTERIAS_VALIDAS = [
     "LOTTO ACTIVO",
     "LA GRANJITA",
@@ -68,7 +68,6 @@ LOTERIAS_VALIDAS = [
     "CALAMAR A",
     "CALAMAR B",
     "MEGA GUACA",
-    "RULETA ROYAL",
 ]
 
 
@@ -105,10 +104,8 @@ def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
   u_detalle = detalle_resultado.upper().strip()
   u_hora = hora.upper().strip()
 
-  if u_loteria not in LOTERIAS_VALIDAS:
-    return
-
-  if "RULETA ROYAL" in u_loteria or "RULETA ROYAL" in u_detalle:
+  # Ignorar estrictamente si es Ruleta Royal o no está en la lista permitida
+  if u_loteria == "RULETA ROYAL" or u_loteria not in LOTERIAS_VALIDAS:
     return
 
   palabras_prohibidas = [
@@ -130,7 +127,7 @@ def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
 
   if clave_unica not in enviados_set:
     enviados_set.add(clave_unica)
-    # Si estamos en el escaneo inicial, solo registramos en memoria sin hacer spam
+    # Si estamos en el escaneo inicial al encender, solo registramos en memoria sin hacer spam
     if not initial_scan_done:
       return
 
@@ -264,7 +261,7 @@ def tarea_fin_jornada():
   bot.send_message(TEST_CHANNEL, msg)
 
 
-# ================= SCRAPING POR TARJETAS INDIVIDUALES =================
+# ================= SCRAPING POR TARJETAS INDEPENDIENTES =================
 
 
 def verificar_resultados():
@@ -274,38 +271,48 @@ def verificar_resultados():
     resp = requests.get(URL_WINBIG, headers=headers, verify=False, timeout=10)
     if resp.status_code == 200:
       soup = BeautifulSoup(resp.text, "html.parser")
-      
-      # Buscamos contenedores/tarjetas en la página
-      cards = soup.find_all(["div", "section", "article"])
 
-      for card in cards:
-        parts = [p.strip() for p in card.get_text(separator="|", strip=True).split("|") if p.strip()]
+      boxes = soup.find_all(["div", "section", "article"])
+      seen_cards = set()
+
+      for box in boxes:
+        box_text = box.get_text(separator="|", strip=True)
+        if "-" not in box_text or (
+            "AM" not in box_text.upper() and "PM" not in box_text.upper()
+        ):
+          continue
+
+        parts = [p.strip() for p in box_text.split("|") if p.strip()]
         if not parts:
           continue
 
-        # Identificar con precisión el nombre de la lotería buscando en los primeros elementos de la tarjeta
+        # Identificar con precisión milimétrica el nombre de la lotería basado estrictamente en la lista oficial
         matched_lotto = None
-        for p in parts[:4]:
+        for p in parts[:5]:
           p_up = p.upper()
+          if p_up == "RULETA ROYAL":
+            matched_lotto = None
+            break
           if p_up in LOTERIAS_VALIDAS:
             matched_lotto = p_up
             break
-
-        if not matched_lotto:
-          # Búsqueda parcial por si hay texto adicional en el título
-          for p in parts[:3]:
-            p_up = p.upper()
-            for l_name in LOTERIAS_VALIDAS:
-              if l_name in p_up:
-                matched_lotto = l_name
-                break
-            if matched_lotto:
+          for l_name in LOTERIAS_VALIDAS:
+            if l_name in p_up:
+              matched_lotto = l_name
               break
+          if matched_lotto:
+            break
 
         if not matched_lotto or matched_lotto == "RULETA ROYAL":
           continue
 
-        # Recorrer buscando pares de hora y resultado dentro de esta tarjeta específica
+        # Firma única para evitar procesar contenedores anidados duplicados de la misma tarjeta
+        card_signature = f"{matched_lotto}_{len(parts)}_{parts[0]}"
+        if card_signature in seen_cards:
+          continue
+        seen_cards.add(card_signature)
+
+        # Recorrer buscando pares limpios de hora y resultado dentro de esta tarjeta
         i = 0
         while i < len(parts) - 1:
           item = parts[i]
