@@ -15,17 +15,17 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= CONFIGURACIÓN =================
 TOKEN = "8728747633:AAHakMFznhlpK6QbkZinctgbl131wE2hIeI"
-TEST_CHANNEL = "@pruebajsj"  # Canal de pruebas configurado
+TEST_CHANNEL = "@pruebajsj"  # Canal de pruebas indicado
 
 bot = telebot.TeleBot(TOKEN)
 scheduler = BackgroundScheduler(timezone="America/Caracas")
 app = Flask(__name__)
 
-# Control estricto para evitar duplicados y spam de resultados
+# Memoria estricta para evitar duplicados y spam diario
 enviados_set = set()
 ultimas_claves_piramide = []
 
-# Enlaces de páginas oficiales de loterías
+# Enlaces de páginas oficiales individuales de loterías
 PAGINAS_OFICIALES = {
     "LOTTO ACTIVO": "https://www.lottoactivo.com/resultados/lotto_activo/",
     "GUACHARO ACTIVO": "https://www.guacharoactivo.com.ve/resultados",
@@ -38,8 +38,6 @@ PAGINAS_OFICIALES = {
     "LOTTO ACTIVO RD INTERNACIONAL": (
         "https://www.lottoactivo.com/resultados/lotto_activo_internacional/"
     ),
-    "GUACA ACTIVA": "https://lotery.winbigvzla.com/resultados",
-    "MEGA GUACA": "https://lotery.winbigvzla.com/resultados",
     "EL GUACHARITO MILLONARIO": "https://elguacharitomillonario.com/",
     "TRIO ACTIVO": "https://www.lottoactivo.com/resultados/trio_activo/",
     "TRIPLE GUACA37": "https://www.guacaactiva.com/",
@@ -48,7 +46,7 @@ PAGINAS_OFICIALES = {
 
 @app.route("/")
 def health_check():
-  return "Bot Agencia Harold José 3.0 activo y operando correctamente.", 200
+  return "Bot Agencia Harold José 3.0 operando correctamente.", 200
 
 
 # ================= FUNCIONES AUXILIARES =================
@@ -71,12 +69,16 @@ def obtener_tasa_bcv():
   return "742,23"
 
 
-def enviar_resultado_unico(loteria, texto_resultado):
-  """Filtra y envía el resultado con el formato exacto pedido, evitando duplicados."""
+def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
+  """Valida rigurosamente que el resultado sea nuevo y lo envía al canal con el formato exacto."""
   global enviados_set
-  t_upper = texto_resultado.upper()
 
-  # Palabras prohibidas que indican que el sorteo no ha salido
+  u_loteria = nombre_loteria.upper()
+  u_detalle = detalle_resultado.upper()
+
+  # Excluir Ruleta Royal y estados pendientes
+  if "RULETA ROYAL" in u_loteria or "RULETA ROYAL" in u_detalle:
+    return
   palabras_prohibidas = [
       "PENDIENTE",
       "PRÓXIMO",
@@ -84,26 +86,24 @@ def enviar_resultado_unico(loteria, texto_resultado):
       "CIERRE",
       "JUEGA",
       "SORTEO",
-      "RULETA ROYAL",
       "EN ESPERA",
   ]
-  if any(p in t_upper for p in palabras_prohibidas):
-    return
-  if not ("AM" in t_upper or "PM" in t_upper):
-    return
-  if "-" not in t_upper:
-    return
-  if len(texto_resultado) < 5 or len(texto_resultado) > 80:
+  if any(p in u_detalle for p in palabras_prohibidas):
     return
 
-  # Identificador único por lotería + hora + resultado para evitar spam absoluto
-  clave_unica = f"{loteria}_{texto_resultado.strip()}"
+  # El detalle debe contener un guión separando el número y el animal (ej: "36 - CULEBRA")
+  if "-" not in detalle_resultado:
+    return
+
+  # Clave única absoluta para evitar que se repita la misma lotería, hora y resultado en todo el día
+  clave_unica = f"{u_loteria}_{hora.upper()}_{u_detalle.strip()}"
+
   if clave_unica not in enviados_set:
     enviados_set.add(clave_unica)
     mensaje = (
         "🎯 AG HAROLD JOSE 🎯\n\n"
-        f"{loteria}\n"
-        f"🕒 {texto_resultado.strip()}\n"
+        f"{nombre_loteria.upper()}\n"
+        f"🕒 {hora.upper()}  {detalle_resultado.strip()}\n"
         "https://t.me/resultadosagharoldjose"
     )
     bot.send_message(TEST_CHANNEL, mensaje)
@@ -237,15 +237,75 @@ def tarea_fin_jornada():
 def verificar_resultados():
   headers = {"User-Agent": "Mozilla/5.0"}
 
-  # Revisión específica de cada página oficial con su respectivo nombre de lotería
+  # 1. Monitoreo de la página Win Big (agrupa varias loterías en una sola web)
+  winbig_urls = [
+      "https://lotery.winbigvzla.com/resultados",
+      "https://resultados365.com/",
+  ]
+  for url in winbig_urls:
+    try:
+      resp = requests.get(url, headers=headers, verify=False, timeout=10)
+      if resp.status_code == 200:
+        soup = BeautifulSoup(resp.text, "html.parser")
+        # Buscamos bloques de loterías o contenedores estructurados
+        containers = soup.find_all(
+            ["div", "section", "article"],
+            class_=lambda x: x
+            and any(
+                k in x.lower()
+                for k in ["loteria", "card", "box", "item", "result"]
+            ),
+        )
+        if not containers:
+          containers = soup.find_all(["div", "tr"])
+
+        for container in containers:
+          textos_bloque = container.get_text(separator="|", strip=True)
+          if "-" in textos_bloque and ("AM" in textos_bloque.upper() or "PM" in textos_bloque.upper()):
+            partes = [p.strip() for p in textos_bloque.split("|") if p.strip()]
+            # Intentar deducir la lotería y la hora/resultado del bloque
+            loteria_encontrada = "GUACA ACTIVA"  # Por defecto en winbig
+            for p in partes:
+              p_up = p.upper()
+              if any(
+                  l in p_up
+                  for l in [
+                      "GUACA",
+                      "MEGA",
+                      "GRANJA",
+                      "ACTIVO",
+                      "CHAIMA",
+                      "SELVA",
+                  ]
+              ):
+                if "RULETA ROYAL" in p_up:
+                  break
+                loteria_encontrada = p
+              elif ("AM" in p_up or "PM" in p_up) and "-" in p:
+                # Extraer hora y resultado limpio
+                procesar_y_enviar_resultado(loteria_encontrada, "Sorteo", p)
+    except Exception as e:
+      print(f"Error escaneando WinBig {url}: {e}")
+
+  # 2. Monitoreo de páginas oficiales individuales
   for loteria, url_oficial in PAGINAS_OFICIALES.items():
     try:
       resp = requests.get(url_oficial, headers=headers, verify=False, timeout=10)
       if resp.status_code == 200:
         soup = BeautifulSoup(resp.text, "html.parser")
+        # Buscamos elementos que contengan horas y resultados con guiones
         for block in soup.find_all(["div", "span", "td", "p", "li"]):
           txt = block.get_text(separator=" ", strip=True)
-          enviar_resultado_unico(loteria, txt)
+          t_up = txt.upper()
+          if ("AM" in t_up or "PM" in t_up) and "-" in txt:
+            # Separar hora si está presente en el texto
+            palabras = txt.split()
+            hora = "Sorteo"
+            for i, w in enumerate(palabras):
+              if w.upper() in ["AM", "PM"] and i > 0:
+                hora = f"{palabras[i-1]} {w}"
+                break
+            procesar_y_enviar_resultado(loteria, hora, txt)
     except Exception as e:
       print(f"Error en oficial {loteria}: {e}")
 
@@ -271,7 +331,7 @@ def escuchar_canales(message):
         " https://wa.me/p/24724650613899486/584124489363\n\n"
         "RESULTADOS AUTOMÁTICOS\n"
         "https://t.me/resultadosagharoldjose\n\n"
-        "¡Mucho éxito en la jornada de hoy! 🍀✨"
+        "¡Mucho éxito in la jornada de hoy! 🍀✨"
     )
     bot.send_message(TEST_CHANNEL, respuesta_activa)
 
