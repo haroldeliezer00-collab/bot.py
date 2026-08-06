@@ -25,23 +25,8 @@ app = Flask(__name__)
 enviados_set = set()
 ultimas_claves_piramide = []
 
-# Enlaces de páginas oficiales individuales de loterías
-PAGINAS_OFICIALES = {
-    "LOTTO ACTIVO": "https://www.lottoactivo.com/resultados/lotto_activo/",
-    "GUACHARO ACTIVO": "https://www.guacharoactivo.com.ve/resultados",
-    "LOTO CHAIMA": "https://lotochaima.com/",
-    "LA GRANJITA": "https://lagranjitaonline.com/",
-    "SELVA PLUS": "https://www.selvaplus.com/resultados",
-    "MONJE MILLONARIO": (
-        "https://www.lottoactivo.com/resultados/lottoactivo2(monjemillonario)/"
-    ),
-    "LOTTO ACTIVO RD INTERNACIONAL": (
-        "https://www.lottoactivo.com/resultados/lotto_activo_internacional/"
-    ),
-    "EL GUACHARITO MILLONARIO": "https://elguacharitomillonario.com/",
-    "TRIO ACTIVO": "https://www.lottoactivo.com/resultados/trio_activo/",
-    "TRIPLE GUACA37": "https://www.guacaactiva.com/",
-}
+# Única fuente oficial establecida por solicitud
+URL_WINBIG = "https://lotery.winbigvzla.com/resultados"
 
 
 @app.route("/")
@@ -70,7 +55,7 @@ def obtener_tasa_bcv():
 
 
 def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
-  """Valida rigurosamente que el resultado sea nuevo y lo envía al canal con el formato exacto."""
+  """Valida rigurosamente que el resultado sea nuevo y lo envía al canal con el formato exacto limpio."""
   global enviados_set
 
   u_loteria = nombre_loteria.upper()
@@ -90,11 +75,11 @@ def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
   if any(p in u_detalle for p in palabras_prohibidas):
     return
 
-  # El detalle debe contener un guión separando el número y el animal (ej: "73 - CALAMAR")
+  # El detalle debe contener un guión separando el número y el animal (ej: "36 - CULEBRA")
   if "-" not in detalle_resultado:
     return
 
-  # Clave única absoluta para evitar que se repita la misma lotería, hora y resultado en todo el día
+  # Clave única absoluta por lotería, hora y resultado exacto para evitar repeticiones en todo el día
   clave_unica = f"{u_loteria}_{hora.upper()}_{u_detalle.strip()}"
 
   if clave_unica not in enviados_set:
@@ -211,7 +196,7 @@ def tarea_aviso_importante():
 def tarea_pollas():
   msg = (
       "📢 ¡Pollas actualizadas!\n"
-      "Puedes verlas aquí 👇\n"
+      "Puedes verlas hier 👇\n"
       "https://t.me/pollasydupletas\n\n"
       "¡Mucho éxito! 🍀"
   )
@@ -229,77 +214,60 @@ def tarea_fin_jornada():
   bot.send_message(TEST_CHANNEL, msg)
 
 
-# ================= SCRAPING AUTOMÁTICO CADA 30 SEGUNDOS =================
+# ================= SCRAPING EXCLUSIVO WIN BIG CADA 30 SEGUNDOS =================
 
 
 def verificar_resultados():
   headers = {"User-Agent": "Mozilla/5.0"}
+  try:
+    resp = requests.get(URL_WINBIG, headers=headers, verify=False, timeout=10)
+    if resp.status_code == 200:
+      soup = BeautifulSoup(resp.text, "html.parser")
 
-  # 1. Monitoreo individual de cada página oficial asignada en el diccionario
-  for loteria, url_oficial in PAGINAS_OFICIALES.items():
-    try:
-      resp = requests.get(url_oficial, headers=headers, verify=False, timeout=10)
-      if resp.status_code == 200:
-        soup = BeautifulSoup(resp.text, "html.parser")
-        for block in soup.find_all(["div", "span", "td", "p", "li"]):
-          txt = block.get_text(separator=" ", strip=True)
-          t_up = txt.upper()
-          if ("AM" in t_up or "PM" in t_up) and "-" in txt:
-            palabras = txt.split()
-            hora = "Sorteo"
-            for i, w in enumerate(palabras):
-              if w.upper() in ["AM", "PM"] and i > 0:
-                hora = f"{palabras[i-1]} {w}"
-                break
-            procesar_y_enviar_resultado(loteria, hora, txt)
-    except Exception as e:
-      print(f"Error en oficial {loteria}: {e}")
+      # Buscamos cada tarjeta o contenedor individual de lotería en la página
+      tarjetas = soup.find_all(
+          ["div", "section"],
+          class_=lambda x: x
+          and any(
+              k in x.lower() for k in ["card", "box", "item", "lotto", "col"]
+          ),
+      )
+      if not tarjetas:
+        tarjetas = soup.find_all(["div", "tr"])
 
-  # 2. Monitoreo de páginas múltiples (Win Big y Resultados 365) con separación estricta
-  winbig_urls = [
-      "https://lotery.winbigvzla.com/resultados",
-      "https://resultados365.com/",
-  ]
-  for url in winbig_urls:
-    try:
-      resp = requests.get(url, headers=headers, verify=False, timeout=10)
-      if resp.status_code == 200:
-        soup = BeautifulSoup(resp.text, "html.parser")
-        # Buscamos contenedores que dividan las secciones de loterías
-        cards = soup.find_all(
-            ["div", "section"],
-            class_=lambda x: x
-            and any(
-                k in x.lower() for k in ["card", "box", "item", "lotto", "col"]
-            ),
-        )
-        if not cards:
-          cards = soup.find_all(["div", "tr"])
+      for tarjeta in tarjetas:
+        texto_tarjeta = tarjeta.get_text(separator=" | ", strip=True)
+        t_up = texto_tarjeta.upper()
 
-        for card in cards:
-          texto_card = card.get_text(separator=" | ", strip=True)
-          t_card_up = texto_card.upper()
-          if "-" in texto_card and ("AM" in t_card_up or "PM" in t_card_up):
-            # Determinar el nombre exacto de la lotería dentro de este bloque específico
-            nombre_lote = "GUACA ACTIVA"
-            if "MEGA" in t_card_up:
-              nombre_lote = "MEGA GUACA"
-            elif "GUACA" in t_card_up and "MEGA" not in t_card_up:
-              nombre_lote = "GUACA ACTIVA"
-            elif "GRANJA" in t_card_up:
-              nombre_lote = "LA GRANJITA"
+        if "-" in texto_tarjeta and ("AM" in t_up or "PM" in t_up):
+          # Extraer de manera limpia el nombre de la lotería que encabeza la tarjeta
+          partes = [p.strip() for p in texto_tarjeta.split("|") if p.strip()]
+          if not partes:
+            continue
 
-            if "RULETA ROYAL" in t_card_up:
-              continue
+          nombre_loteria = partes[
+              0
+          ]  # El título principal de la caja es el nombre de la lotería
+          if "RULETA ROYAL" in nombre_loteria.upper():
+            continue
 
-            # Extraer la hora y el resultado limpio de la tarjeta
-            partes = [p.strip() for p in texto_card.split("|") if p.strip()]
-            for p in partes:
-              p_up = p.upper()
-              if ("AM" in p_up or "PM" in p_up) and "-" in p:
-                procesar_y_enviar_resultado(nombre_lote, "Sorteo", p)
-    except Exception as e:
-      print(f"Error escaneando WinBig {url}: {e}")
+          # Recorremos los elementos internos buscando la hora y el resultado (ej: "08:00 AM" y "19 - CHIVO")
+          i = 0
+          while i < len(partes):
+            elemento = partes[i]
+            el_up = elemento.upper()
+            if ("AM" in el_up or "PM" in el_up) and i + 1 < len(partes):
+              hora_sorteo = elemento
+              resultado_sorteo = partes[i + 1]
+              if "-" in resultado_sorteo:
+                procesar_y_enviar_resultado(
+                    nombre_loteria, hora_sorteo, resultado_sorteo
+                )
+              i += 2
+            else:
+              i += 1
+  except Exception as e:
+    print(f"Error escaneando WinBig: {e}")
 
 
 # ================= MANEJADOR DE CANALES PRIVADOS =================
@@ -356,7 +324,7 @@ scheduler.add_job(tarea_aviso_importante, "cron", hour=17, minute=0)
 scheduler.add_job(tarea_fin_jornada, "cron", hour=21, minute=10)
 # Minuto 10 de cada hora desde las 7 AM hasta las 6 PM
 scheduler.add_job(tarea_pollas, "cron", hour="7-18", minute=10)
-# Verificación de resultados cada 30 segundos
+# Verificación de resultados en Win Big cada 30 segundos
 scheduler.add_job(verificar_resultados, "interval", seconds=30)
 
 if __name__ == "__main__":
