@@ -26,6 +26,7 @@ TOKEN = "8728747633:AAHakMFznhlpK6QbkZinctgbl131wE2hIeI"
 CANAL = "@pruebajsj"  # Canal de pruebas indicado
 
 bot = telebot.TeleBot(TOKEN)
+scheduler = BackgroundScheduler(timezone="America/Caracas")
 
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
@@ -545,41 +546,38 @@ def verificar_resultados():
     print(f"⚠️ Error general en resultados: {e}")
 
 
-def loop_bot():
-  verificar_resultados()
-
-  # Programación de tareas diarias (Hora de Venezuela)
-  schedule.every().day.at("00:00").do(limpiar_memoria_diaria)
-  schedule.every().day.at("06:30").do(enviar_saludo_madrugada)
-  schedule.every().day.at("06:31").do(enviar_piramide_diaria)
-  schedule.every().day.at("06:30").do(enviar_tasa_dolar)
-  schedule.every().day.at("07:00").do(enviar_saludo_matutino)
+def iniciar_scheduler():
+  # Tareas programadas con APScheduler (Hora de Venezuela)
+  scheduler.add_job(limpiar_memoria_diaria, "cron", hour=0, minute=0)
+  scheduler.add_job(enviar_saludo_madrugada, "cron", hour=6, minute=30)
+  scheduler.add_job(enviar_piramide_diaria, "cron", hour=6, minute=31)
+  scheduler.add_job(enviar_tasa_dolar, "cron", hour=6, minute=30)
+  scheduler.add_job(enviar_saludo_matutino, "cron", hour=7, minute=0)
 
   # Avisos de taquilla automáticos
-  schedule.every().day.at("10:00").do(enviar_aviso_taquilla)
-  schedule.every().day.at("14:00").do(enviar_aviso_taquilla)
-  schedule.every().day.at("17:00").do(enviar_aviso_taquilla)
+  scheduler.add_job(enviar_aviso_taquilla, "cron", hour=10, minute=0)
+  scheduler.add_job(enviar_aviso_taquilla, "cron", hour=14, minute=0)
+  scheduler.add_job(enviar_aviso_taquilla, "cron", hour=17, minute=0)
 
   # Refuerzo automático de taquilla a las 3:30 p.m. (15:30)
-  schedule.every().day.at("15:30").do(tarea_refuerzo_tarde)
+  scheduler.add_job(tarea_refuerzo_tarde, "cron", hour=15, minute=30)
 
   # Tasa BCV de la tarde (6:30 PM / 18:30)
-  schedule.every().day.at("18:30").do(enviar_tasa_dolar)
+  scheduler.add_job(enviar_tasa_dolar, "cron", hour=18, minute=30)
 
   # Mensaje de cierre a las 09:10 PM (21:10)
-  schedule.every().day.at("21:10").do(enviar_mensaje_cierre)
+  scheduler.add_job(enviar_mensaje_cierre, "cron", hour=21, minute=10)
 
-  # --- VERIFICACIÓN DE RESULTADOS CADA 30 SEGUNDOS ---
-  schedule.every(30).seconds.do(verificar_resultados)
+  # --- VERIFICACIÓN AUTOMÁTICA DE RESULTADOS CADA 30 SEGUNDOS ---
+  scheduler.add_job(verificar_resultados, "interval", seconds=30)
 
-  while True:
-    schedule.run_pending()
-    time.sleep(1)
+  scheduler.start()
+  verificar_resultados()  # Sincronización inicial al arrancar
 
 
 if __name__ == "__main__":
-  # Hilo para ejecutar las tareas programadas y web scraping de resultados
-  t_schedule = Thread(target=loop_bot)
+  # Hilo para ejecutar APScheduler en segundo plano de forma confiable
+  t_schedule = Thread(target=iniciar_scheduler)
   t_schedule.daemon = True
   t_schedule.start()
 
