@@ -19,7 +19,7 @@ TEST_CHANNEL = "@pruebajsj"  # Canal de pruebas configurado
 
 bot = telebot.TeleBot(TOKEN)
 
-# Zona horaria de Venezuela (UTC-4) mediante librería estándar (sin requerir pytz)
+# Zona horaria de Venezuela (UTC-4)
 TZ_CARACAS = timezone(timedelta(hours=-4))
 scheduler = BackgroundScheduler(timezone="America/Caracas")
 app = Flask(__name__)
@@ -107,7 +107,6 @@ def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
   u_detalle = detalle_resultado.upper().strip()
   u_hora = hora.upper().strip()
 
-  # Bloquear estrictamente Ruleta Royal o nombres fuera de la lista oficial
   if u_loteria == "RULETA ROYAL" or u_loteria not in LOTERIAS_VALIDAS:
     return
 
@@ -264,7 +263,7 @@ def tarea_fin_jornada():
   bot.send_message(TEST_CHANNEL, msg)
 
 
-# ================= SCRAPING AISLADO POR CADA TARJETA DE LOTERÍA =================
+# ================= SCRAPING PRECISO POR CADA LOTERÍA OFICIAL =================
 
 
 def verificar_resultados():
@@ -274,67 +273,55 @@ def verificar_resultados():
     resp = requests.get(URL_WINBIG, headers=headers, verify=False, timeout=10)
     if resp.status_code == 200:
       soup = BeautifulSoup(resp.text, "html.parser")
+      processed_cards = set()
 
-      cards = soup.find_all(
-          ["div", "section", "article"],
-          class_=lambda x: x
-          and any(
-              k in x.lower() for k in ["card", "box", "item", "lotto", "col"]
-          ),
-      )
-      if not cards:
-        cards = soup.find_all(["div", "section"])
-
-      for card in cards:
-        card_text = card.get_text(separator="|", strip=True)
-        if "-" not in card_text or (
-            "AM" not in card_text.upper() and "PM" not in card_text.upper()
-        ):
+      # Buscamos de forma directa cada lotería de la lista oficial en la página
+      for loteria in LOTERIAS_VALIDAS:
+        if loteria == "RULETA ROYAL":
           continue
 
-        parts = [p.strip() for p in card_text.split("|") if p.strip()]
-        if not parts:
-          continue
+        # Encontrar el elemento que contiene el nombre exacto de esta lotería
+        elementos_titulo = soup.find_all(
+            ["div", "span", "h3", "h4", "p"],
+            string=lambda t: t and loteria in t.upper(),
+        )
 
-        matched_lotto = None
-        for p in parts[:4]:
-          p_up = p.upper()
-          if p_up == "RULETA ROYAL":
-            matched_lotto = None
-            break
-          if p_up in LOTERIAS_VALIDAS:
-            matched_lotto = p_up
-            break
-          for l_name in LOTERIAS_VALIDAS:
-            if l_name == p_up or (
-                len(l_name) > 4 and l_name in p_up and "WIN BIG" not in p_up
-            ):
-              matched_lotto = l_name
-              break
-          if matched_lotto:
-            break
+        for el in elementos_titulo:
+          # Aislar estrictamente la tarjeta contenedora de esta lotería específica
+          card = el.find_parent(
+              ["div", "section", "article"],
+              class_=lambda x: x
+              and any(
+                  k in x.lower() for k in ["card", "box", "item", "lotto", "col"]
+              ),
+          )
+          if not card:
+            card = el.find_parent("div")
 
-        if not matched_lotto or matched_lotto == "RULETA ROYAL":
-          continue
+          if card and id(card) not in processed_cards:
+            processed_cards.add(id(card))
+            card_text = card.get_text(separator="|", strip=True)
+            parts = [p.strip() for p in card_text.split("|") if p.strip()]
 
-        i = 0
-        while i < len(parts) - 1:
-          item = parts[i]
-          item_up = item.upper()
-          if "AM" in item_up or "PM" in item_up:
-            hora_sorteo = item
-            if i + 1 < len(parts):
-              res_sorteo = parts[i + 1]
-              if "-" in res_sorteo and not any(
-                  w in res_sorteo.upper()
-                  for w in ["PENDIENTE", "PRÓXIMO", "EN ESPERA"]
-              ):
-                procesar_y_enviar_resultado(
-                    matched_lotto, hora_sorteo, res_sorteo
-                )
-            i += 2
-          else:
-            i += 1
+            # Extraer horas y resultados exclusivamente dentro de esta tarjeta
+            i = 0
+            while i < len(parts) - 1:
+              item = parts[i]
+              item_up = item.upper()
+              if "AM" in item_up or "PM" in item_up:
+                hora_sorteo = item
+                if i + 1 < len(parts):
+                  res_sorteo = parts[i + 1]
+                  if "-" in res_sorteo and not any(
+                      w in res_sorteo.upper()
+                      for w in ["PENDIENTE", "PRÓXIMO", "EN ESPERA"]
+                  ):
+                    procesar_y_enviar_resultado(
+                        loteria, hora_sorteo, res_sorteo
+                    )
+                i += 2
+              else:
+                i += 1
 
       if not initial_scan_done:
         initial_scan_done = True
@@ -424,4 +411,5 @@ if __name__ == "__main__":
   t.start()
 
   port = int(os.environ.get("PORT", 10000))
-  app.run(host="0.0.0.0", port=port)
+  # Se añade use_reloader=False para evitar que Flask duplique los procesos y envíe mensajes repetidos
+  app.run(host="0.0.0.0", port=port, use_reloader=False)
