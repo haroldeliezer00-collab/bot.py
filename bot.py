@@ -21,13 +21,54 @@ bot = telebot.TeleBot(TOKEN)
 scheduler = BackgroundScheduler(timezone="America/Caracas")
 app = Flask(__name__)
 
-# Memoria y control de escaneo inicial para evitar reenvíos al reiniciar
+# Memoria estricta para evitar duplicados en el día
 enviados_set = set()
 initial_scan_done = False
 ultimas_claves_piramide = []
 
-# Única fuente oficial establecida: Win Big
+# Fuente oficial única
 URL_WINBIG = "https://lotery.winbigvzla.com/resultados"
+
+# Lista oficial de nombres válidos de loterías extraídos de la plataforma
+LOTERIAS_VALIDAS = [
+    "LOTTO ACTIVO",
+    "LA GRANJITA",
+    "EL GUACHARITO MILLONARIO",
+    "GUACHARO ACTIVO",
+    "SELVA PLUS",
+    "LOTTO ACTIVO RD INT",
+    "GRANJA MILLONARIA",
+    "CONDOR GANA",
+    "CENTENA ANIMAL",
+    "CENTENA PLUS",
+    "LOTTO ACTIVO RDOMINICANA",
+    "LOTTO CHAIMA",
+    "CAZALOTON",
+    "CHANCE ANIMAL",
+    "LA RICACHONA",
+    "TROPI GANA",
+    "FRUITAGANA",
+    "GRANJITA PLUS",
+    "GRANJAZO",
+    "PANDA PLUS",
+    "MEGA ANIMAL",
+    "MONJE MILLONARIO",
+    "LOTTO GATO",
+    "GATAZO",
+    "ZOOLOGICO ACTIVO",
+    "GUACA ACTIVA",
+    "LOTO ANIMALITO",
+    "LOTTO PANTERA",
+    "LOTTO REAL",
+    "LOTTO LA QUINTA",
+    "RULETON PERU",
+    "LOTTOMAX",
+    "RULETON COLOMBIA",
+    "RULETON VENEZUELA",
+    "CALAMAR A",
+    "CALAMAR B",
+    "MEGA GUACA",
+]
 
 
 @app.route("/")
@@ -56,16 +97,17 @@ def obtener_tasa_bcv():
 
 
 def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
-  """Valida rigurosamente que el resultado sea limpio, nuevo y pertenezca a su respectiva lotería."""
+  """Valida que el resultado pertenezca estrictamente a la lotería correcta y sea nuevo."""
   global enviados_set, initial_scan_done
 
   u_loteria = nombre_loteria.upper().strip()
   u_detalle = detalle_resultado.upper().strip()
   u_hora = hora.upper().strip()
 
-  # Validaciones de seguridad para descartar nombres basura o numéricos
-  if not u_loteria or len(u_loteria) < 3 or u_loteria.isdigit():
+  # Validar que el nombre de la lotería esté en nuestra lista oficial aprobada
+  if u_loteria not in LOTERIAS_VALIDAS:
     return
+
   if "RULETA ROYAL" in u_loteria or "RULETA ROYAL" in u_detalle:
     return
 
@@ -80,7 +122,6 @@ def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
   if any(p in u_detalle for p in palabras_prohibidas):
     return
 
-  # El resultado debe tener un guión (ej: "36 - CULEBRA")
   if "-" not in detalle_resultado:
     return
 
@@ -89,7 +130,7 @@ def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
 
   if clave_unica not in enviados_set:
     enviados_set.add(clave_unica)
-    # Si todavía estamos en el escaneo inicial al arrancar, solo lo guardamos en memoria sin enviar
+    # Si estamos en el escaneo inicial, solo registramos en memoria sin hacer spam al encender
     if not initial_scan_done:
       return
 
@@ -223,7 +264,7 @@ def tarea_fin_jornada():
   bot.send_message(TEST_CHANNEL, msg)
 
 
-# ================= SCRAPING PRECISO DE WIN BIG CADA 30 SEGUNDOS =================
+# ================= SCRAPING PRECISO USANDO EL LISTADO OFICIAL =================
 
 
 def verificar_resultados():
@@ -233,7 +274,6 @@ def verificar_resultados():
     resp = requests.get(URL_WINBIG, headers=headers, verify=False, timeout=10)
     if resp.status_code == 200:
       soup = BeautifulSoup(resp.text, "html.parser")
-
       boxes = soup.find_all(["div", "section", "article"])
 
       for box in boxes:
@@ -243,33 +283,18 @@ def verificar_resultados():
         ):
           parts = [p.strip() for p in box_text.split("|") if p.strip()]
 
-          # Extraer el nombre real de la lotería omitiendo etiquetas no deseadas (como PATRONUS)
+          # Identificar con precisión milimétrica el nombre de la lotería basado exclusivamente en la lista oficial
           nombre_lote = ""
-          exclusiones = [
-              "PATRONUS",
-              "WIN BIG",
-              "RESULTADOS",
-              "PENDIENTE",
-              "PRÓXIMO",
-              "RULETA ROYAL",
-          ]
-
           for p in parts:
             p_up = p.upper()
-            if any(exc in p_up for exc in exclusiones):
-              continue
-            if p.isdigit() or len(p) <= 2 or "-" in p:
-              continue
-            if "AM" in p_up or "PM" in p_up:
-              break
-            if len(p) >= 3:
-              nombre_lote = p
+            if p_up in LOTERIAS_VALIDAS:
+              nombre_lote = p_up
               break
 
-          if not nombre_lote or "RULETA ROYAL" in nombre_lote.upper():
+          if not nombre_lote:
             continue
 
-          # Recorrer buscando los bloques de hora y resultado dentro de esta caja
+          # Recorrer buscando pares de hora y resultado dentro de esta tarjeta
           i = 0
           while i < len(parts) - 1:
             item = parts[i]
@@ -289,12 +314,11 @@ def verificar_resultados():
             else:
               i += 1
 
-      # Marcar el escaneo inicial como completado después de la primera pasada exitosa
       if not initial_scan_done:
         initial_scan_done = True
         print(
             "Escaneo inicial completado. A partir de ahora solo se enviarán"
-            " resultados nuevos."
+            " resultados nuevos en tiempo real."
         )
 
   except Exception as e:
@@ -308,7 +332,6 @@ def verificar_resultados():
 def escuchar_canales(message):
   texto = message.text or message.caption or ""
 
-  # Canal Privado 1: TAQUILLA ACTIVA
   if "TAQUILLA ACTIVA" in texto.upper():
     respuesta_activa = (
         "✅ AG HAROLD JOSÉ ACTIVA ✅\n"
@@ -326,7 +349,6 @@ def escuchar_canales(message):
     )
     bot.send_message(TEST_CHANNEL, respuesta_activa)
 
-  # Canal Privado 2: RESULTADO PROGRAMADO
   if "📊 RESULTADO PROGRAMADO" in texto:
     partes = texto.split("📊 RESULTADO PROGRAMADO")
     if len(partes) > 1:
@@ -353,8 +375,12 @@ scheduler.add_job(tarea_aviso_importante, "cron", hour=10, minute=0)
 scheduler.add_job(tarea_aviso_importante, "cron", hour=14, minute=0)
 scheduler.add_job(tarea_aviso_importante, "cron", hour=17, minute=0)
 scheduler.add_job(tarea_fin_jornada, "cron", hour=21, minute=10)
-# Minuto 10 de cada hora desde las 7 AM hasta las 6 PM
-scheduler.add_job(tarea_pollas, "cron", hour="7-18", minute=10)
+
+# Envío de pollas estrictamente cada hora en el minuto 10, desde las 7:10 AM hasta las 5:10 PM
+scheduler.add_job(
+    tarea_pollas, "cron", hour="7-17", minute=10, id="job_pollas"
+)
+
 # Verificación de resultados en Win Big cada 30 segundos
 scheduler.add_job(verificar_resultados, "interval", seconds=30)
 
