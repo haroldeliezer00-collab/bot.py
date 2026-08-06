@@ -56,26 +56,30 @@ def obtener_tasa_bcv():
     return "742,23"
 
 def es_resultado_valido(texto):
-    """Filtra estrictamente para descartar horas vacías, estados pendientes o texto basura."""
+    """Filtra estrictamente para aceptar únicamente resultados reales con su animal y número."""
     t_upper = texto.upper()
     
-    # Excluir explícitamente palabras clave de estados no jugados o pendientes
+    # 1. Excluir explícitamente palabras clave de estados no jugados, pendientes o ruletas prohibidas
     palabras_prohibidas = ["PENDIENTE", "PRÓXIMO", "PROXIMO", "CIERRE", "JUEGA", "SORTEO", "RULETA ROYAL"]
     if any(p in t_upper for p in palabras_prohibidas):
         return False
         
-    # El resultado real debe contener un formato de hora (AM/PM) y algún indicador numérico/guión del animalito
-    if not any(h in t_upper for h in ["AM", "PM"]):
+    # 2. Obligatorio: Debe contener formato de hora AM o PM
+    if not ("AM" in t_upper or "PM" in t_upper):
         return False
         
-    # Debe tener una longitud lógica para un resultado (ej: "07:15 PM 79 - GUSANO")
-    if len(texto) < 5 or len(texto) > 80:
+    # 3. Obligatorio: Debe contener un guión '-' (separador estándar entre el número del animal y su nombre)
+    if "-" not in t_upper:
+        return False
+        
+    # 4. Longitud coherente para un resultado de animalitos
+    if len(texto) < 6 or len(texto) > 80:
         return False
         
     return True
 
 def verificar_resultados():
-    """Revisa las páginas cada 30 segundos, ignorando pendientes y validando resultados reales."""
+    """Revisa las páginas cada 30 segundos de forma automatizada."""
     global enviados_set
     headers = {'User-Agent': 'Mozilla/5.0'}
 
