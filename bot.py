@@ -438,60 +438,27 @@ def verificar_resultados():
 
     soup = BeautifulSoup(respuesta.text, "html.parser")
 
-    # Buscar contenedores de tarjetas candidatos
-    candidatos = soup.find_all(
+    # Buscar contenedores principales de tarjetas de lotería
+    tarjetas = soup.find_all(
         ["div", "article", "section"],
         class_=re.compile(r"card|box|item|lotto|result|panel|col", re.IGNORECASE),
     )
-    if not candidatos:
-      candidatos = soup.find_all(["div", "section"])
-
-    # Aislar exclusivamente las tarjetas "hoja" (las más internas) para evitar solapamientos
-    tarjetas = []
-    for c in candidatos:
-      tiene_hijos_candidatos = any(
-          h in c.find_all(True) for h in candidatos if h != c
-      )
-      if not tiene_hijos_candidatos:
-        tarjetas.append(c)
     if not tarjetas:
-      tarjetas = candidatos
+      tarjetas = soup.find_all(["div", "section"])
 
     nuevos_encontrados = []
 
     for tarjeta in tarjetas:
-      # Buscar un elemento de título específico dentro de esta tarjeta individual
-      elem_titulo = tarjeta.find(
-          ["h1", "h2", "h3", "h4", "h5", "strong", "b", "div", "span"],
-          class_=re.compile(r"title|header|name|lotto", re.IGNORECASE),
-      )
-
-      texto_titulo = ""
-      if elem_titulo:
-        texto_titulo = elem_titulo.get_text(" ", strip=True).upper()
-
       texto_tarjeta = tarjeta.get_text(" | ", strip=True).upper()
 
-      # Identificar con precisión quirúrgica el nombre oficial de la lotería
+      # Identificar de forma estricta el nombre de la lotería oficial
       nombre_loteria = None
-
-      # 1. Probar primero si el título exacto coincide o comienza con alguna lotería válida
       for loteria_valida in LOTERIAS_VALIDAS:
-        if (
-            loteria_valida == texto_titulo
-            or texto_titulo.startswith(loteria_valida + " ")
-            or texto_titulo.startswith(loteria_valida + "-")
-        ):
+        # Validar que el nombre oficial esté presente como palabra exacta al inicio o dentro del bloque clave
+        patron_inicio = r"(?:^|\\|\b)" + re.escape(loteria_valida) + r"(?:\b|$)"
+        if re.search(patron_inicio, texto_tarjeta[:80]):
           nombre_loteria = loteria_valida
           break
-
-      # 2. Si no se encontró por título específico, buscar palabra exacta al inicio del texto de la tarjeta
-      if not nombre_loteria:
-        for loteria_valida in LOTERIAS_VALIDAS:
-          pattern = r"\b" + re.escape(loteria_valida) + r"\b"
-          if re.search(pattern, texto_tarjeta[:60]):
-            nombre_loteria = loteria_valida
-            break
 
       if not nombre_loteria or "RULETA ROYAL" in nombre_loteria:
         continue
