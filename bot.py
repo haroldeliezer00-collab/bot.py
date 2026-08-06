@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import os
 import random
 import threading
@@ -6,7 +6,6 @@ import time
 from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
 from flask import Flask
-import pytz
 import requests
 import telebot
 import urllib3
@@ -20,9 +19,9 @@ TEST_CHANNEL = "@pruebajsj"  # Canal de pruebas configurado
 
 bot = telebot.TeleBot(TOKEN)
 
-# Zona horaria estricta de Venezuela
-TZ_CARACAS = pytz.timezone("America/Caracas")
-scheduler = BackgroundScheduler(timezone=TZ_CARACAS)
+# Zona horaria de Venezuela (UTC-4) mediante librería estándar (sin requerir pytz)
+TZ_CARACAS = timezone(timedelta(hours=-4))
+scheduler = BackgroundScheduler(timezone="America/Caracas")
 app = Flask(__name__)
 
 # Memoria estricta para evitar duplicados en el día
@@ -247,7 +246,7 @@ def tarea_aviso_importante():
 def tarea_pollas():
   msg = (
       "📢 ¡Pollas actualizadas!\n"
-      "Puedes verlas hier 👇\n"
+      "Puedes verlas aquí 👇\n"
       "https://t.me/pollasydupletas\n\n"
       "¡Mucho éxito! 🍀"
   )
@@ -276,7 +275,6 @@ def verificar_resultados():
     if resp.status_code == 200:
       soup = BeautifulSoup(resp.text, "html.parser")
 
-      # Buscamos cada tarjeta individual de manera aislada en la página
       cards = soup.find_all(
           ["div", "section", "article"],
           class_=lambda x: x
@@ -298,7 +296,6 @@ def verificar_resultados():
         if not parts:
           continue
 
-        # Identificar estrictamente el encabezado real de esta tarjeta comparando con la lista oficial
         matched_lotto = None
         for p in parts[:4]:
           p_up = p.upper()
@@ -320,7 +317,6 @@ def verificar_resultados():
         if not matched_lotto or matched_lotto == "RULETA ROYAL":
           continue
 
-        # Extraer pares de hora y resultado exclusivamente dentro de esta tarjeta
         i = 0
         while i < len(parts) - 1:
           item = parts[i]
@@ -402,7 +398,7 @@ scheduler.add_job(tarea_aviso_importante, "cron", hour=14, minute=0)
 scheduler.add_job(tarea_aviso_importante, "cron", hour=17, minute=0)
 scheduler.add_job(tarea_fin_jornada, "cron", hour=21, minute=10)
 
-# Envío de pollas estrictamente cada hora en el minuto 10, desde las 7:10 AM hasta las 5:10 PM (Hora Venezuela)
+# Envío de pollas estrictamente cada hora en el minuto 10, desde las 7:10 AM hasta las 5:10 PM
 scheduler.add_job(
     tarea_pollas, "cron", hour="7-17", minute=10, id="job_pollas"
 )
