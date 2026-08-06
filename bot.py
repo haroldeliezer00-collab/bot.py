@@ -33,50 +33,23 @@ scheduler = BackgroundScheduler(timezone="America/Caracas")
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
 
-# Listado oficial de loterías ordenadas de mayor a menor longitud
-LOTERIAS_VALIDAS = sorted(
-    [
-        "LOTTO ACTIVO RD INT",
-        "LOTTO ACTIVO RDOMINICANA",
-        "EL GUACHARITO MILLONARIO",
-        "ZOOLOGICO ACTIVO",
-        "GRANJA MILLONARIA",
-        "CENTENA ANIMAL",
-        "GUACHARO ACTIVO",
-        "CHANCE ANIMAL",
-        "RULETON VENEZUELA",
-        "RULETON COLOMBIA",
-        "LOTTO LA QUINTA",
-        "GRANJITA PLUS",
-        "MONJE MILLONARIO",
-        "LOTO ANIMALITO",
-        "LOTTO PANTERA",
-        "RULETON PERU",
-        "LA RICACHONA",
-        "CENTENA PLUS",
-        "LOTTO ACTIVO",
-        "LA GRANJITA",
-        "SELVA PLUS",
-        "CONDOR GANA",
-        "LOTTO CHAIMA",
-        "CAZALOTON",
-        "TROPI GANA",
-        "FRUITAGANA",
-        "GRANJAZO",
-        "PANDA PLUS",
-        "MEGA ANIMAL",
-        "LOTTO GATO",
-        "GATAZO",
-        "GUACA ACTIVA",
-        "LOTTO REAL",
-        "LOTTOMAX",
-        "CALAMAR A",
-        "CALAMAR B",
-        "MEGA GUACA",
-    ],
-    key=len,
-    reverse=True,
-)
+# Enlaces oficiales adicionales para respaldo/verificación
+ENLACES_OFICIALES = {
+    "LOTTO ACTIVO": "https://www.lottoactivo.com/resultados/lotto_activo/",
+    "GUACHARO ACTIVO": "https://www.guacharoactivo.com.ve/resultados",
+    "LOTO CHAIMA": "https://lotochaima.com/",
+    "LA GRANJITA": "https://lagranjitaonline.com/",
+    "SELVA PLUS": "https://www.selvaplus.com/resultados",
+    "MONJE MILLONARIO": (
+        "https://www.lottoactivo.com/resultados/lottoactivo2(monjemillonario)/"
+    ),
+    "LOTTO ACTIVO RD INTERNACIONAL": (
+        "https://www.lottoactivo.com/resultados/lotto_activo_internacional/"
+    ),
+    "GUACA ACTIVA": "https://lotery.winbigvzla.com/resultados",
+    "MEGA GUACA": "https://lotery.winbigvzla.com/resultados",
+    "EL GUACHARITO MILLONARIO": "https://elguacharitomillonario.com/",
+}
 
 resultados_enviados = set()
 primera_ejecucion = True
@@ -239,6 +212,14 @@ def enviar_telegram_foto(photo_id, caption):
     enviar_telegram(caption, disable_web_preview=True)
 
 
+def limpiar_memoria_diaria():
+  global resultados_enviados, primera_ejecucion, taquilla_activa_hoy
+  resultados_enviados.clear()
+  primera_ejecucion = True
+  taquilla_activa_hoy = False
+  print("🧹 Memoria limpiada para el nuevo día.")
+
+
 def enviar_saludo_madrugada():
   enviar_telegram(
       "🎯 CENTRO DE APUESTAS HAROLD JOSÉ 🎯\n\n"
@@ -343,25 +324,27 @@ def enviar_tasa_dolar():
       soup = BeautifulSoup(response.text, "html.parser")
       dolar_div = soup.find("div", id="dolar")
       if dolar_div and dolar_div.find("strong"):
-        precio_dolar = dolar_div.find("strong").get_text(strip=True)
+        raw_precio = dolar_div.find("strong").get_text(strip=True)
+        cleaned_num = re.sub(r"[^\d,\.]", "", raw_precio)
+        if "," in cleaned_num:
+          parts = cleaned_num.split(",")
+          if len(parts) == 2 and len(parts[1]) > 2:
+            cleaned_num = f"{parts[0]},{parts[1][:2]}"
+        elif "." in cleaned_num:
+          parts = cleaned_num.split(".")
+          if len(parts) == 2 and len(parts[1]) > 2:
+            cleaned_num = f"{parts[0]},{parts[1][:2]}"
+        precio_dolar = cleaned_num if cleaned_num else raw_precio
+
     enviar_telegram(
         "💵 TASA OFICIAL BCV 💵\n\n"
         "🏦 Moneda: Dólar Estadounidense\n"
         f"📈 Precio Oficial: Bs. {precio_dolar}\n\n"
-        "🔗 Fuente: Banco Central de Venezuela\n"
-        f"La página para verificar el precio oficial del dólar es esta {URL_BCV}",
+        "🔗 Fuente: Banco Central de Venezuela",
         disable_web_preview=True,
     )
   except Exception as e:
     print(f"Error BCV: {e}")
-    enviar_telegram(
-        "💵 TASA OFICIAL BCV 💵\n\n"
-        "🏦 Moneda: Dólar Estadounidense\n"
-        "📈 Precio Oficial: Bs. 742,23\n\n"
-        "🔗 Fuente: Banco Central de Venezuela\n"
-        f"La página para verificar el precio oficial del dólar es esta {URL_BCV}",
-        disable_web_preview=True,
-    )
 
 
 def enviar_aviso_taquilla():
@@ -392,15 +375,9 @@ def tarea_envio_programado_taquilla():
       enviar_telegram(caption_taquilla, disable_web_preview=True)
 
 
-def reiniciar_activacion_diaria():
-  global taquilla_activa_hoy
-  taquilla_activa_hoy = False
-
-
 def tarea_minuto_diez():
   global ultima_hora_polla
   ahora = datetime.now()
-  # Desde las 7:10 AM hasta las 5:00 PM (17:00)
   if (
       (ahora.hour == 7 and ahora.minute >= 10)
       or (7 < ahora.hour < 17)
@@ -432,7 +409,7 @@ def enviar_mensaje_cierre():
   taquilla_activa_hoy = False
 
 
-# ================= VERIFICACIÓN PRECISA Y QUIRÚRGICA (CADA 30 SEGUNDOS) =================
+# ================= VERIFICACIÓN AUTOMÁTICA ROBUSTA (CADA 30 SEGUNDOS) =================
 def verificar_resultados():
   global resultados_enviados, primera_ejecucion
   try:
@@ -446,94 +423,105 @@ def verificar_resultados():
       return
 
     soup = BeautifulSoup(respuesta.text, "html.parser")
-    candidatos = soup.find_all(
+    tarjetas = soup.find_all(
         ["div", "article", "section"],
-        class_=re.compile(r"card|box|item|lotto|result|panel|col", re.IGNORECASE),
+        class_=re.compile(r"card|box|item|lotto|result", re.IGNORECASE),
     )
-    if not candidatos:
-      candidatos = soup.find_all(["div", "section"])
-
-    tarjetas = []
-    for c in candidatos:
-      tiene_hijos = any(h in c.find_all(True) for h in candidatos if h != c)
-      if not tiene_hijos:
-        tarjetas.append(c)
     if not tarjetas:
-      tarjetas = candidatos
+      tarjetas = soup.find_all(["div", "section"])
 
     nuevos_encontrados = []
 
     for tarjeta in tarjetas:
-      texto_tarjeta = tarjeta.get_text(" | ", strip=True).upper()
-      elem_titulo = tarjeta.find(
-          ["h1", "h2", "h3", "h4", "h5", "strong", "b", "div", "span"],
-          class_=re.compile(r"title|header|name|lotto", re.IGNORECASE),
+      nombre_loteria = ""
+      posibles_titulos = tarjeta.find_all(
+          ["h1", "h2", "h3", "h4", "h5", "span", "div", "strong", "b"],
+          class_=re.compile(r"title|header|name|lotto|text", re.IGNORECASE),
       )
-      texto_titulo = (
-          elem_titulo.get_text(" ", strip=True).upper() if elem_titulo else ""
-      )
-
-      nombre_loteria = None
-      for loteria_valida in LOTERIAS_VALIDAS:
+      for pt in posibles_titulos:
+        t_text = pt.get_text(" ", strip=True).upper()
         if (
-            loteria_valida == texto_titulo
-            or texto_titulo.startswith(loteria_valida + " ")
-            or texto_titulo.startswith(loteria_valida + "-")
+            t_text
+            and len(t_text) > 2
+            and not re.search(r"\d{1,2}:\d{2}", t_text)
+            and "PENDIENTE" not in t_text
         ):
-          nombre_loteria = loteria_valida
-          break
-
-      if not nombre_loteria:
-        for loteria_valida in LOTERIAS_VALIDAS:
-          if texto_tarjeta.startswith(loteria_valida) or f" {loteria_valida} " in texto_tarjeta[:40]:
-            nombre_loteria = loteria_valida
+          if t_text not in ["WINBIG", "RESULTADOS"]:
+            nombre_loteria = t_text
             break
 
-      if not nombre_loteria or "RULETA ROYAL" in nombre_loteria:
+      if not nombre_loteria:
+        lineas = [
+            l.strip().upper()
+            for l in tarjeta.get_text("\n", strip=True).split("\n")
+            if l.strip()
+        ]
+        for linea in lineas:
+          if (
+              len(linea) > 2
+              and not re.search(r"\d{1,2}:\d{2}", linea)
+              and "PENDIENTE" not in linea
+              and "-" not in linea
+          ):
+            nombre_loteria = linea
+            break
+
+      if not nombre_loteria or len(nombre_loteria) > 40:
         continue
 
-      partes = [p.strip() for p in texto_tarjeta.split(" | ") if p.strip()]
+      # Limpiar caracteres especiales para dejar un solo emoji limpio
+      nombre_loteria = re.sub(r"^[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+", "", nombre_loteria)
+      nombre_loteria = limpiar_texto(nombre_loteria)
+      if not nombre_loteria:
+        continue
 
-      i = 0
-      while i < len(partes) - 1:
-        item = partes[i]
-        item_up = item.upper()
-        if "AM" in item_up or "PM" in item_up:
-          hora_sorteo = item
-          if i + 1 < len(partes):
-            res_sorteo = partes[i + 1]
-            if "-" in res_sorteo and not any(
-                w in res_sorteo.upper()
-                for w in [
-                    "PENDIENTE",
-                    "PRÓXIMO",
-                    "PROXIMO",
-                    "EN ESPERA",
-                    "CIERRE",
-                ]
-            ):
-              resultado_limpio = limpiar_texto(res_sorteo).upper()
-              clave = (nombre_loteria, hora_sorteo, resultado_limpio)
+      slots_sorteo = tarjeta.find_all(
+          ["div", "li", "span", "tr"],
+          class_=re.compile(r"item|slot|draw|row|col", re.IGNORECASE),
+      )
+      if not slots_sorteo:
+        slots_sorteo = [tarjeta]
 
-              if primera_ejecucion:
-                resultados_enviados.add(clave)
-              else:
-                if clave not in resultados_enviados:
-                  item_dict = {
-                      "loteria": nombre_loteria,
-                      "hora": hora_sorteo,
-                      "resultado": resultado_limpio,
-                  }
-                  if item_dict not in nuevos_encontrados:
-                    nuevos_encontrados.append(item_dict)
-                    resultados_enviados.add(clave)
-          i += 2
+      for slot in slots_sorteo:
+        texto_slot = slot.get_text(" ", strip=True).upper()
+        if "PENDIENTE" in texto_slot:
+          continue
+
+        match_h = re.search(r"(\d{1,2}:\d{2}\s*(?:AM|PM))", texto_slot)
+        if not match_h:
+          continue
+        hora = match_h.group(1).upper()
+
+        match_res = re.search(
+            r"(\d{1,2}\s-\s[A-ZÁÉÍÓÚÑa-zñáéíóú]+(?:\s+[A-ZÁÉÍÓÚÑa-zñáéíóú]+)?)",
+            texto_slot,
+        )
+        if not match_res:
+          continue
+
+        resultado_final = limpiar_texto(match_res.group(1)).upper()
+        clave = (nombre_loteria, hora, resultado_final)
+
+        if primera_ejecucion:
+          resultados_enviados.add(clave)
         else:
-          i += 1
+          if clave not in resultados_enviados:
+            ya_enviado_hora = any(
+                c[0] == nombre_loteria and c[1] == hora for c in resultados_enviados
+            )
+            if not ya_enviado_hora:
+              item_dict = {
+                  "loteria": nombre_loteria,
+                  "hora": hora,
+                  "resultado": resultado_final,
+              }
+              if item_dict not in nuevos_encontrados:
+                nuevos_encontrados.append(item_dict)
+                resultados_enviados.add(clave)
 
     if primera_ejecucion:
       primera_ejecucion = False
-      print("✅ Escaneo inicial completado (resultados base sincronizados).")
+      print(f"✅ Sincronización inicial lista. Total: {len(resultados_enviados)}")
       return
 
     if nuevos_encontrados:
@@ -548,10 +536,10 @@ def verificar_resultados():
         time.sleep(2)
 
   except Exception as e:
-    print(f"Error en resultados: {e}")
+    print(f"⚠️ Error en resultados: {e}")
 
 
-# --- MANEJADOR UNIVERSAL DE ACTIVACIÓN DE TAQUILLA ---
+# --- MANEJADOR DE TAQUILLA ACTIVA ---
 def procesar_activacion_taquilla(message):
   global taquilla_activa_hoy, imagen_taquilla_file_id
   caption = message.caption or message.text or ""
@@ -560,7 +548,7 @@ def procesar_activacion_taquilla(message):
       taquilla_activa_hoy = True
       imagen_taquilla_file_id = message.photo[-1].file_id
       enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
-      print("✅ Taquilla activada y publicada automáticamente con la imagen.")
+      print("✅ Taquilla activada con imagen.")
     else:
       taquilla_activa_hoy = True
       enviar_telegram(caption_taquilla, disable_web_preview=True)
@@ -588,10 +576,10 @@ def handle_text_messages(message):
       enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
     else:
       enviar_telegram(caption_taquilla, disable_web_preview=True)
-    print("✅ Taquilla activada por mensaje de texto.")
+    print("✅ Taquilla activada por texto.")
 
 
-# --- MANEJADOR INTELIGENTE DE REVISIÓN Y LIMPIEZA PARA "RESULTADOS PROGRAMADOS" O "RESULTADOS ANIMALITOS" ---
+# --- MANEJADOR DE RESULTADOS PROGRAMADOS / ANIMALITOS ---
 def procesar_limpieza_y_envio_animalitos(text):
   texto_lower = text.lower()
   if (
@@ -607,10 +595,7 @@ def procesar_limpieza_y_envio_animalitos(text):
     texto_limpio = text[pos:].strip()
     mensaje_completo = f"{HEADER_RESULTADOS}\n\n{texto_limpio}"
     enviar_telegram(mensaje_completo, disable_web_preview=True)
-    print(
-        "✅ Mensaje programado/animalitos procesado y enviado con éxito al"
-        " canal."
-    )
+    print("✅ Mensaje programado / animalitos enviado con éxito.")
     return True
   return False
 
@@ -625,68 +610,4 @@ def handle_channel_posts(message):
     func=lambda message: True, content_types=["text"]
 )
 def handle_direct_messages_animalitos(message):
-  text = message.text or ""
-  procesar_limpieza_y_envio_animalitos(text)
-# -----------------------------------------------------------------------------
-
-
-def iniciar_scheduler():
-  # Tareas programadas con APScheduler
-  scheduler.add_job(enviar_saludo_madrugada, "cron", hour=6, minute=30)
-  scheduler.add_job(enviar_piramide_diaria, "cron", hour=6, minute=31)
-  scheduler.add_job(enviar_saludo_matutino, "cron", hour=7, minute=0)
-
-  scheduler.add_job(enviar_tasa_dolar, "cron", hour=6, minute=30)
-  scheduler.add_job(enviar_tasa_dolar, "cron", hour=18, minute=30)
-
-  scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
-  scheduler.add_job(reiniciar_activacion_diaria, "cron", hour=5, minute=0)
-
-  # Pollas cada hora al minuto 10 desde las 7:10 hasta las 17:00
-  scheduler.add_job(
-      tarea_minuto_diez, "cron", hour="7-17", minute=10
-  )
-  scheduler.add_job(enviar_mensaje_cierre, "cron", hour=21, minute=10)
-
-  # Verificación automática de resultados exactamente cada 30 segundos
-  scheduler.add_job(verificar_resultados, "interval", seconds=30)
-
-  scheduler.start()
-  verificar_resultados()
-
-
-def iniciar_polling_bot():
-  while True:
-    try:
-      bot.infinity_polling(
-          skip_pending=True,
-          interval=3,
-          timeout=20,
-          allowed_updates=[
-              "message",
-              "edited_message",
-              "channel_post",
-              "edited_channel_post",
-          ],
-      )
-    except Exception as e:
-      print(f"⚠️ Error en polling de Telegram: {e}")
-      time.sleep(5)
-
-
-# Inicialización segura de hilos en segundo plano
-try:
-  t_schedule = Thread(target=iniciar_scheduler)
-  t_schedule.daemon = True
-  t_schedule.start()
-
-  t_bot = Thread(target=iniciar_polling_bot)
-  t_bot.daemon = True
-  t_bot.start()
-  print("✅ Hilos en segundo plano inicializados correctamente.")
-except Exception as e:
-  print(f"⚠️ Error al iniciar hilos: {e}")
-
-if __name__ == "__main__":
-  port = int(os.environ.get("PORT", 5000))
-  app.run(host="0.0.0.0", port=port, use_reloader=False)
+  text = message.text
