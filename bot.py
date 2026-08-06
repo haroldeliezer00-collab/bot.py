@@ -6,6 +6,7 @@ import time
 from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
 from flask import Flask
+import pytz
 import requests
 import telebot
 import urllib3
@@ -18,7 +19,10 @@ TOKEN = "8728747633:AAHakMFznhlpK6QbkZinctgbl131wE2hIeI"
 TEST_CHANNEL = "@pruebajsj"  # Canal de pruebas configurado
 
 bot = telebot.TeleBot(TOKEN)
-scheduler = BackgroundScheduler(timezone="America/Caracas")
+
+# Zona horaria estricta de Venezuela
+TZ_CARACAS = pytz.timezone("America/Caracas")
+scheduler = BackgroundScheduler(timezone=TZ_CARACAS)
 app = Flask(__name__)
 
 # Memoria estricta para evitar duplicados en el día
@@ -97,14 +101,14 @@ def obtener_tasa_bcv():
 
 
 def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
-  """Valida que el resultado pertenezca estrictamente a la lotería correcta y sea nuevo."""
+  """Valida rigurosamente que el resultado sea limpio, único y pertenezca a la lotería correcta."""
   global enviados_set, initial_scan_done
 
   u_loteria = nombre_loteria.upper().strip()
   u_detalle = detalle_resultado.upper().strip()
   u_hora = hora.upper().strip()
 
-  # Ignorar estrictamente si es Ruleta Royal o no está en la lista permitida
+  # Bloquear estrictamente Ruleta Royal o nombres fuera de la lista oficial
   if u_loteria == "RULETA ROYAL" or u_loteria not in LOTERIAS_VALIDAS:
     return
 
@@ -127,7 +131,7 @@ def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
 
   if clave_unica not in enviados_set:
     enviados_set.add(clave_unica)
-    # Si estamos en el escaneo inicial al encender, solo registramos en memoria sin hacer spam
+    # Si estamos en el escaneo inicial al arrancar, solo registramos en memoria sin hacer spam
     if not initial_scan_done:
       return
 
@@ -154,7 +158,7 @@ def tarea_buenos_dias():
 
 def tarea_piramide():
   global ultimas_claves_piramide
-  today = datetime.now().strftime("%d/%m/%Y")
+  today = datetime.now(TZ_CARACAS).strftime("%d/%m/%Y")
 
   posibles_datos = [
       "25-13-07",
@@ -243,7 +247,7 @@ def tarea_aviso_importante():
 def tarea_pollas():
   msg = (
       "📢 ¡Pollas actualizadas!\n"
-      "Puedes verlas aquí 👇\n"
+      "Puedes verlas hier 👇\n"
       "https://t.me/pollasydupletas\n\n"
       "¡Mucho éxito! 🍀"
   )
@@ -261,7 +265,7 @@ def tarea_fin_jornada():
   bot.send_message(TEST_CHANNEL, msg)
 
 
-# ================= SCRAPING POR TARJETAS INDEPENDIENTES =================
+# ================= SCRAPING AISLADO POR CADA TARJETA DE LOTERÍA =================
 
 
 def verificar_resultados():
@@ -272,23 +276,31 @@ def verificar_resultados():
     if resp.status_code == 200:
       soup = BeautifulSoup(resp.text, "html.parser")
 
-      boxes = soup.find_all(["div", "section", "article"])
-      seen_cards = set()
+      # Buscamos cada tarjeta individual de manera aislada en la página
+      cards = soup.find_all(
+          ["div", "section", "article"],
+          class_=lambda x: x
+          and any(
+              k in x.lower() for k in ["card", "box", "item", "lotto", "col"]
+          ),
+      )
+      if not cards:
+        cards = soup.find_all(["div", "section"])
 
-      for box in boxes:
-        box_text = box.get_text(separator="|", strip=True)
-        if "-" not in box_text or (
-            "AM" not in box_text.upper() and "PM" not in box_text.upper()
+      for card in cards:
+        card_text = card.get_text(separator="|", strip=True)
+        if "-" not in card_text or (
+            "AM" not in card_text.upper() and "PM" not in card_text.upper()
         ):
           continue
 
-        parts = [p.strip() for p in box_text.split("|") if p.strip()]
+        parts = [p.strip() for p in card_text.split("|") if p.strip()]
         if not parts:
           continue
 
-        # Identificar con precisión milimétrica el nombre de la lotería basado estrictamente en la lista oficial
+        # Identificar estrictamente el encabezado real de esta tarjeta comparando con la lista oficial
         matched_lotto = None
-        for p in parts[:5]:
+        for p in parts[:4]:
           p_up = p.upper()
           if p_up == "RULETA ROYAL":
             matched_lotto = None
@@ -297,7 +309,9 @@ def verificar_resultados():
             matched_lotto = p_up
             break
           for l_name in LOTERIAS_VALIDAS:
-            if l_name in p_up:
+            if l_name == p_up or (
+                len(l_name) > 4 and l_name in p_up and "WIN BIG" not in p_up
+            ):
               matched_lotto = l_name
               break
           if matched_lotto:
@@ -306,13 +320,7 @@ def verificar_resultados():
         if not matched_lotto or matched_lotto == "RULETA ROYAL":
           continue
 
-        # Firma única para evitar procesar contenedores anidados duplicados de la misma tarjeta
-        card_signature = f"{matched_lotto}_{len(parts)}_{parts[0]}"
-        if card_signature in seen_cards:
-          continue
-        seen_cards.add(card_signature)
-
-        # Recorrer buscando pares limpios de hora y resultado dentro de esta tarjeta
+        # Extraer pares de hora y resultado exclusivamente dentro de esta tarjeta
         i = 0
         while i < len(parts) - 1:
           item = parts[i]
@@ -394,7 +402,7 @@ scheduler.add_job(tarea_aviso_importante, "cron", hour=14, minute=0)
 scheduler.add_job(tarea_aviso_importante, "cron", hour=17, minute=0)
 scheduler.add_job(tarea_fin_jornada, "cron", hour=21, minute=10)
 
-# Envío de pollas estrictamente cada hora en el minuto 10, desde las 7:10 AM hasta las 5:10 PM
+# Envío de pollas estrictamente cada hora en el minuto 10, desde las 7:10 AM hasta las 5:10 PM (Hora Venezuela)
 scheduler.add_job(
     tarea_pollas, "cron", hour="7-17", minute=10, id="job_pollas"
 )
