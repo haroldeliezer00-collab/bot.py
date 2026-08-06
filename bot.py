@@ -76,7 +76,7 @@ def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
   u_loteria = nombre_loteria.upper()
   u_detalle = detalle_resultado.upper()
 
-  # Excluir Ruleta Royal y estados pendientes
+  # Excluir Ruleta Royal y estados pendientes o en espera
   if "RULETA ROYAL" in u_loteria or "RULETA ROYAL" in u_detalle:
     return
   palabras_prohibidas = [
@@ -85,13 +85,12 @@ def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
       "PROXIMO",
       "CIERRE",
       "JUEGA",
-      "SORTEO",
       "EN ESPERA",
   ]
   if any(p in u_detalle for p in palabras_prohibidas):
     return
 
-  # El detalle debe contener un guión separando el número y el animal (ej: "36 - CULEBRA")
+  # El detalle debe contener un guión separando el número y el animal (ej: "73 - CALAMAR")
   if "-" not in detalle_resultado:
     return
 
@@ -101,7 +100,6 @@ def procesar_y_enviar_resultado(nombre_loteria, hora, detalle_resultado):
   if clave_unica not in enviados_set:
     enviados_set.add(clave_unica)
     mensaje = (
-        "AG HAROLD JOSÉ RESULTADOS OFICIALES\n"
         "🎯 AGENCIA HAROLD JOSE 🎯\n\n"
         f"{nombre_loteria.upper()}\n"
         f"🕒 {hora.upper()}  {detalle_resultado.strip()}\n"
@@ -237,7 +235,7 @@ def tarea_fin_jornada():
 def verificar_resultados():
   headers = {"User-Agent": "Mozilla/5.0"}
 
-  # Monitoreo estricto de cada página oficial individual usando su clave exacta como nombre de lotería
+  # 1. Monitoreo individual de cada página oficial asignada en el diccionario
   for loteria, url_oficial in PAGINAS_OFICIALES.items():
     try:
       resp = requests.get(url_oficial, headers=headers, verify=False, timeout=10)
@@ -257,7 +255,7 @@ def verificar_resultados():
     except Exception as e:
       print(f"Error en oficial {loteria}: {e}")
 
-  # Monitoreo de páginas generales (Win Big / Resultados365)
+  # 2. Monitoreo de páginas múltiples (Win Big y Resultados 365) con separación estricta
   winbig_urls = [
       "https://lotery.winbigvzla.com/resultados",
       "https://resultados365.com/",
@@ -267,31 +265,39 @@ def verificar_resultados():
       resp = requests.get(url, headers=headers, verify=False, timeout=10)
       if resp.status_code == 200:
         soup = BeautifulSoup(resp.text, "html.parser")
-        for container in soup.find_all(["div", "tr", "section"]):
-          textos_bloque = container.get_text(separator="|", strip=True)
-          if "-" in textos_bloque and (
-              "AM" in textos_bloque.upper() or "PM" in textos_bloque.upper()
-          ):
-            partes = [p.strip() for p in textos_bloque.split("|") if p.strip()]
-            loteria_encontrada = "GUACA ACTIVA"
+        # Buscamos contenedores que dividan las secciones de loterías
+        cards = soup.find_all(
+            ["div", "section"],
+            class_=lambda x: x
+            and any(
+                k in x.lower() for k in ["card", "box", "item", "lotto", "col"]
+            ),
+        )
+        if not cards:
+          cards = soup.find_all(["div", "tr"])
+
+        for card in cards:
+          texto_card = card.get_text(separator=" | ", strip=True)
+          t_card_up = texto_card.upper()
+          if "-" in texto_card and ("AM" in t_card_up or "PM" in t_card_up):
+            # Determinar el nombre exacto de la lotería dentro de este bloque específico
+            nombre_lote = "GUACA ACTIVA"
+            if "MEGA" in t_card_up:
+              nombre_lote = "MEGA GUACA"
+            elif "GUACA" in t_card_up and "MEGA" not in t_card_up:
+              nombre_lote = "GUACA ACTIVA"
+            elif "GRANJA" in t_card_up:
+              nombre_lote = "LA GRANJITA"
+
+            if "RULETA ROYAL" in t_card_up:
+              continue
+
+            # Extraer la hora y el resultado limpio de la tarjeta
+            partes = [p.strip() for p in texto_card.split("|") if p.strip()]
             for p in partes:
               p_up = p.upper()
-              if any(
-                  l in p_up
-                  for l in [
-                      "GUACA",
-                      "MEGA",
-                      "GRANJA",
-                      "ACTIVO",
-                      "CHAIMA",
-                      "SELVA",
-                  ]
-              ):
-                if "RULETA ROYAL" in p_up:
-                  break
-                loteria_encontrada = p
-              elif ("AM" in p_up or "PM" in p_up) and "-" in p:
-                procesar_y_enviar_resultado(loteria_encontrada, "Sorteo", p)
+              if ("AM" in p_up or "PM" in p_up) and "-" in p:
+                procesar_y_enviar_resultado(nombre_lote, "Sorteo", p)
     except Exception as e:
       print(f"Error escaneando WinBig {url}: {e}")
 
