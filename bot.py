@@ -4,6 +4,7 @@ import random
 import re
 from threading import Thread
 import time
+import traceback
 from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
 from flask import Flask
@@ -610,4 +611,4 @@ def handle_channel_posts(message):
     func=lambda message: True, content_types=["text"]
 )
 def handle_direct_messages_animalitos(message):
-  text = message.text
+  te
