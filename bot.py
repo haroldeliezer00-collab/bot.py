@@ -18,11 +18,10 @@ TOKEN = "8728747633:AAHakMFznhlpK6QbkZinctgbl131wE2hIeI"
 TEST_CHANNEL = "@pruebajsj"  # Canal de pruebas configurado
 
 bot = telebot.TeleBot(TOKEN)
-# Zona horaria de Venezuela para que los cronogramas sincronicen de forma exacta
 scheduler = BackgroundScheduler(timezone="America/Caracas")
 app = Flask(__name__)
 
-# Control de duplicados y memoria diaria
+# Control estricto para evitar duplicados y spam de resultados
 enviados_set = set()
 ultimas_claves_piramide = []
 
@@ -72,9 +71,12 @@ def obtener_tasa_bcv():
   return "742,23"
 
 
-def es_resultado_valido(texto):
-  t_upper = texto.upper()
-  # Excluir pendientes, cierres y RULETA ROYAL
+def enviar_resultado_unico(loteria, texto_resultado):
+  """Filtra y envía el resultado con el formato exacto pedido, evitando duplicados."""
+  global enviados_set
+  t_upper = texto_resultado.upper()
+
+  # Palabras prohibidas que indican que el sorteo no ha salido
   palabras_prohibidas = [
       "PENDIENTE",
       "PRÓXIMO",
@@ -83,16 +85,28 @@ def es_resultado_valido(texto):
       "JUEGA",
       "SORTEO",
       "RULETA ROYAL",
+      "EN ESPERA",
   ]
   if any(p in t_upper for p in palabras_prohibidas):
-    return False
+    return
   if not ("AM" in t_upper or "PM" in t_upper):
-    return False
+    return
   if "-" not in t_upper:
-    return False
-  if len(texto) < 6 or len(texto) > 80:
-    return False
-  return True
+    return
+  if len(texto_resultado) < 5 or len(texto_resultado) > 80:
+    return
+
+  # Identificador único por lotería + hora + resultado para evitar spam absoluto
+  clave_unica = f"{loteria}_{texto_resultado.strip()}"
+  if clave_unica not in enviados_set:
+    enviados_set.add(clave_unica)
+    mensaje = (
+        "🎯 AG HAROLD JOSE 🎯\n\n"
+        f"{loteria}\n"
+        f"🕒 {texto_resultado.strip()}\n"
+        "https://t.me/resultadosagharoldjose"
+    )
+    bot.send_message(TEST_CHANNEL, mensaje)
 
 
 # ================= TAREAS PROGRAMADAS (CRON) =================
@@ -221,35 +235,9 @@ def tarea_fin_jornada():
 
 
 def verificar_resultados():
-  global enviados_set
   headers = {"User-Agent": "Mozilla/5.0"}
 
-  general_urls = [
-      "https://lotery.winbigvzla.com/resultados",
-      "https://resultados365.com/",
-  ]
-  for url in general_urls:
-    try:
-      resp = requests.get(url, headers=headers, verify=False, timeout=10)
-      if resp.status_code == 200:
-        soup = BeautifulSoup(resp.text, "html.parser")
-        for item in soup.find_all(["div", "li", "tr", "p", "span"]):
-          texto = item.get_text(separator=" ", strip=True)
-          if not es_resultado_valido(texto):
-            continue
-
-          identificador = f"{url}_{texto}"
-          if identificador not in enviados_set:
-            enviados_set.add(identificador)
-            mensaje_resultado = (
-                "🎯 AG HAROLD JOSE 🎯\n\n"
-                f"{texto}\n"
-                "https://t.me/resultadosagharoldjose"
-            )
-            bot.send_message(TEST_CHANNEL, mensaje_resultado)
-    except Exception as e:
-      print(f"Error escaneando {url}: {e}")
-
+  # Revisión específica de cada página oficial con su respectivo nombre de lotería
   for loteria, url_oficial in PAGINAS_OFICIALES.items():
     try:
       resp = requests.get(url_oficial, headers=headers, verify=False, timeout=10)
@@ -257,19 +245,7 @@ def verificar_resultados():
         soup = BeautifulSoup(resp.text, "html.parser")
         for block in soup.find_all(["div", "span", "td", "p", "li"]):
           txt = block.get_text(separator=" ", strip=True)
-          if not es_resultado_valido(txt):
-            continue
-
-          id_oficial = f"{loteria}_{txt}"
-          if id_oficial not in enviados_set:
-            enviados_set.add(id_oficial)
-            mensaje_oficial = (
-                "🎯 AG HAROLD JOSE 🎯\n\n"
-                f"{loteria}\n"
-                f"{txt}\n"
-                "https://t.me/resultadosagharoldjose"
-            )
-            bot.send_message(TEST_CHANNEL, mensaje_oficial)
+          enviar_resultado_unico(loteria, txt)
     except Exception as e:
       print(f"Error en oficial {loteria}: {e}")
 
@@ -338,7 +314,6 @@ if __name__ == "__main__":
 
   def run_bot():
     try:
-      # Limpiamos webhooks colgados en Telegram para evitar conflictos de doble instancia (Error 409)
       bot.remove_webhook()
       time.sleep(1)
       bot.infinity_polling(skip_pending=True)
