@@ -34,32 +34,57 @@ scheduler = BackgroundScheduler(timezone="America/Caracas")
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
 
-# Enlaces oficiales adicionales para respaldo/verificación
-ENLACES_OFICIALES = {
-    "LOTTO ACTIVO": "https://www.lottoactivo.com/resultados/lotto_activo/",
-    "GUACHARO ACTIVO": "https://www.guacharoactivo.com.ve/resultados",
-    "LOTO CHAIMA": "https://lotochaima.com/",
-    "LA GRANJITA": "https://lagranjitaonline.com/",
-    "SELVA PLUS": "https://www.selvaplus.com/resultados",
-    "MONJE MILLONARIO": (
-        "https://www.lottoactivo.com/resultados/lottoactivo2(monjemillonario)/"
-    ),
-    "LOTTO ACTIVO RD INTERNACIONAL": (
-        "https://www.lottoactivo.com/resultados/lotto_activo_internacional/"
-    ),
-    "GUACA ACTIVA": "https://lotery.winbigvzla.com/resultados",
-    "MEGA GUACA": "https://lotery.winbigvzla.com/resultados",
-    "EL GUACHARITO MILLONARIO": "https://elguacharitomillonario.com/",
-}
+# Listado oficial de loterías ordenadas de mayor a menor longitud
+LOTERIAS_VALIDAS = sorted(
+    [
+        "LOTTO ACTIVO RD INT",
+        "LOTTO ACTIVO RDOMINICANA",
+        "EL GUACHARITO MILLONARIO",
+        "ZOOLOGICO ACTIVO",
+        "GRANJA MILLONARIA",
+        "CENTENA ANIMAL",
+        "GUACHARO ACTIVO",
+        "CHANCE ANIMAL",
+        "RULETON VENEZUELA",
+        "RULETON COLOMBIA",
+        "LOTTO LA QUINTA",
+        "GRANJITA PLUS",
+        "MONJE MILLONARIO",
+        "LOTO ANIMALITO",
+        "LOTTO PANTERA",
+        "RULETON PERU",
+        "LA RICACHONA",
+        "CENTENA PLUS",
+        "LOTTO ACTIVO",
+        "LA GRANJITA",
+        "SELVA PLUS",
+        "CONDOR GANA",
+        "LOTTO CHAIMA",
+        "CAZALOTON",
+        "TROPI GANA",
+        "FRUITAGANA",
+        "GRANJAZO",
+        "PANDA PLUS",
+        "MEGA ANIMAL",
+        "LOTTO GATO",
+        "GATAZO",
+        "GUACA ACTIVA",
+        "LOTTO REAL",
+        "LOTTOMAX",
+        "CALAMAR A",
+        "CALAMAR B",
+        "MEGA GUACA",
+    ],
+    key=len,
+    reverse=True,
+)
 
 resultados_enviados = set()
 primera_ejecucion = True
 ultima_hora_polla = None
 
-# Variables de estado diario para la Taquilla
 taquilla_activa_hoy = False
 imagen_taquilla_file_id = None
-
 caption_taquilla = (
     "✅ AG HAROLD JOSÉ ACTIVA ✅\n"
     "Ya estamos operativos brindando la mejor atención. Calidad, respaldo y"
@@ -250,7 +275,6 @@ def generar_piramide():
 
   cuerpo_piramide = "\n".join(lineas_formateadas)
 
-  # Semilla dinámica para asegurar que los datos claves varíen cada día
   seed_val = (
       int(ahora.strftime("%Y%m%d"))
       + ahora.hour * 100
@@ -435,15 +459,6 @@ def verificar_resultados():
     }
     respuesta = requests.get(URL_LOTERIA, headers=headers, timeout=15)
     if respuesta.status_code != 200:
-      for nombre_ofi, url_ofi in ENLACES_OFICIALES.items():
-        try:
-          res_ofi = requests.get(
-              url_ofi, headers=headers, timeout=10, verify=False
-          )
-          if res_ofi.status_code == 200:
-            pass
-        except:
-          pass
       return
 
     soup = BeautifulSoup(respuesta.text, "html.parser")
@@ -455,6 +470,7 @@ def verificar_resultados():
       tarjetas = soup.find_all(["div", "section"])
 
     nuevos_encontrados = []
+    keys_en_este_ciclo = set()  # Filtro estricto anti-duplicados por ciclo
 
     for tarjeta in tarjetas:
       nombre_loteria = ""
@@ -524,11 +540,15 @@ def verificar_resultados():
 
         resultado_final = limpiar_texto(match_res.group(1)).upper()
         clave = (nombre_loteria, hora, resultado_final)
+        par_loteria_hora = (nombre_loteria, hora)
 
         if primera_ejecucion:
           resultados_enviados.add(clave)
         else:
-          if clave not in resultados_enviados:
+          if (
+              clave not in resultados_enviados
+              and par_loteria_hora not in keys_en_este_ciclo
+          ):
             ya_enviado_hora = any(
                 c[0] == nombre_loteria and c[1] == hora for c in resultados_enviados
             )
@@ -541,6 +561,7 @@ def verificar_resultados():
               if item_dict not in nuevos_encontrados:
                 nuevos_encontrados.append(item_dict)
                 resultados_enviados.add(clave)
+                keys_en_este_ciclo.add(par_loteria_hora)
 
     if primera_ejecucion:
       primera_ejecucion = False
