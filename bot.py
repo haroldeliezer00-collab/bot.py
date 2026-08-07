@@ -34,52 +34,8 @@ scheduler = BackgroundScheduler(timezone="America/Caracas")
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
 
-# Listado oficial de loterías ordenadas de mayor a menor longitud
-LOTERIAS_VALIDAS = sorted(
-    [
-        "LOTTO ACTIVO RD INT",
-        "LOTTO ACTIVO RDOMINICANA",
-        "EL GUACHARITO MILLONARIO",
-        "ZOOLOGICO ACTIVO",
-        "GRANJA MILLONARIA",
-        "CENTENA ANIMAL",
-        "GUACHARO ACTIVO",
-        "CHANCE ANIMAL",
-        "RULETON VENEZUELA",
-        "RULETON COLOMBIA",
-        "LOTTO LA QUINTA",
-        "GRANJITA PLUS",
-        "MONJE MILLONARIO",
-        "LOTO ANIMALITO",
-        "LOTTO PANTERA",
-        "RULETON PERU",
-        "LA RICACHONA",
-        "CENTENA PLUS",
-        "LOTTO ACTIVO",
-        "LA GRANJITA",
-        "SELVA PLUS",
-        "CONDOR GANA",
-        "LOTTO CHAIMA",
-        "CAZALOTON",
-        "TROPI GANA",
-        "FRUITAGANA",
-        "GRANJAZO",
-        "PANDA PLUS",
-        "MEGA ANIMAL",
-        "LOTTO GATO",
-        "GATAZO",
-        "GUACA ACTIVA",
-        "LOTTO REAL",
-        "LOTTOMAX",
-        "CALAMAR A",
-        "CALAMAR B",
-        "MEGA GUACA",
-    ],
-    key=len,
-    reverse=True,
-)
-
-resultados_enviados = set()
+# Control estricto anti-duplicados por ciclo diario
+horarios_enviados_hoy = set()
 primera_ejecucion = True
 ultima_hora_polla = None
 
@@ -98,6 +54,90 @@ caption_taquilla = (
     "RESULTADOS AUTOMÁTICOS\n"
     f"{ENLACE_CANAL}\n\n"
     "¡Mucho éxito en la jornada de hoy! 🍀✨"
+)
+
+# Texto publicitario solicitado para enviar a las 7 am, 3 pm y 6 pm
+TEXTO_PUBLICITARIO = (
+    "🔥 ¡ATENCIÓN JUGADORES! 🔥\n\n"
+    "¿Buscas variedad real, seriedad y pagos seguros al instante? No pierdas"
+    " tiempo dando tumbos por ahí. En la Agencia Harold José tenemos el arsenal"
+    " más completo y pesado de toda Venezuela para que juegues con confianza y"
+    " sin límites.\n\n"
+    "Aquí tienes TODO lo que está disponible a la venta. Revisa la lista"
+    " completa, arma tu jugada y cóbralo seguro:\n"
+    "‎➖➖➖➖➖➖➖➖➖➖\n"
+    "🎰 AGENCIA HAROLD JOSÉ 🎰\n"
+    "🛡️ SEGURIDAD Y CONFIANZA 🛡️\n\n"
+    "6 años brindando respaldo en toda Venezuela, contamos con cupos altos para"
+    " que juegues en grande. ¡Aceptamos Pago Móvil y transferencia!\n"
+    "¡No busques más! Aquí tienes TODAS nuestras opciones disponibles. Juega,"
+    " gana y cobra garantizado. 💸\n"
+    "‎➖➖➖➖➖➖➖➖➖➖\n"
+    "🔥 RULETAS DISPONIBLES 🔥\n"
+    "• Lotto Activo\n"
+    "• La Granjita\n"
+    "• Selva Plus\n"
+    "• Guácharo Activo\n"
+    "• Loto Chaima\n"
+    "• Monje Millonario\n"
+    "• Lotto Inter\n"
+    "• Cazaloton\n"
+    "• Mega Animal\n"
+    "• Centena Animalitos\n"
+    "• Centena Plus\n"
+    "• Guacharito Millonario\n"
+    "• Ruleta Activa\n"
+    "• Granjita Plus\n"
+    "• La Ricachona\n"
+    "• Guaca Activa 37\n"
+    "• Mega Guaca\n"
+    "• Lotto Max\n"
+    "• Tropi Gana\n"
+    "• Cóndor Gana\n"
+    "• Granja Millonaria\n"
+    "• Fruti Gana\n"
+    "• Granjazo\n"
+    "• Lotto Gato\n"
+    "• Gatazo\n"
+    "• Calamar Millonario\n"
+    "‎➖➖➖➖➖➖➖➖➖➖\n\n"
+    "🔢 TRIPLES Y TERMINALES 🔢\n"
+    "• Trio Activo\n"
+    "• Triple Fácil\n"
+    "• Triple Chance\n"
+    "• Triple Caliente\n"
+    "• Triple Zulia\n"
+    "• Triple Táchira\n"
+    "• Triple Caracas\n"
+    "• Triple Zamorano\n"
+    "• Triple Gana\n"
+    "• Triple Napa\n"
+    "• Ricachona\n"
+    "• Triple Centena\n"
+    "• Triple Dorado\n"
+    "• La Ruca\n\n"
+    "‎➖➖➖➖➖➖➖➖➖➖\n\n"
+    "🎰 TRIPLETAS DISPONIBLES 🎰\n"
+    "⚠️ SÓLO SE SELLA HASTA LAS 8:50 AM (No vendo bases)\n\n"
+    "• Lotto Activo | La Granjita | Selva Plus\n"
+    "• Guácharo Activo | Lotto Inter | Cazaloton\n"
+    "• Guacharito Millonario | Monje Millonario | Tropi Gana | Cóndor Gana |"
+    " Granja Millonaria | Fruti Gana | Granjazo | Lotto Max | Ruleta Activa |"
+    " Guaca37....\n\n"
+    "‎➖➖➖➖➖➖➖➖➖➖\n\n"
+    "🎊 POLLAS Y DUPLETAS 🎊\n"
+    "• Polla Animaniacs | Mini Polla\n"
+    "• Pozo Millonario | Super Polla\n"
+    "• Super Seven | Micro Polla\n"
+    "• Sumatoria Niño de Oro\n"
+    "• Polla por Puntos | Dupletas y más...\n\n"
+    "‎➖➖➖➖➖➖➖➖➖➖\n\n"
+    "🌐 BINGOS DISPONIBLES 🌐\n"
+    "• BINGO MILLONARIO PLUS\n"
+    "‎➖➖➖➖➖➖➖➖➖➖\n"
+    "📢 ¡Únete a nuestra comunidad oficial! 🎲🔥\n"
+    "Entra ya a nuestro canal de Telegram para ver todas las pollas:\n"
+    f"👉 {ENLACE_CANAL}"
 )
 
 HEADER_RESULTADOS = (
@@ -127,11 +167,10 @@ def home():
       "👉 <a href='/test/madrugada'>Probar Saludo de Madrugada (6:30 AM)</a><br>"
       "👉 <a href='/test/piramide'>Probar Pirámide Numérica (6:31 AM)</a><br>"
       "👉 <a href='/test/saludo'>Probar Saludo Matutino (7:00 AM)</a><br>"
+      "👉 <a href='/test/publicidad'>Probar Aviso Publicitario (7am/3pm/6pm)</a><br>"
       "👉 <a href='/test/bcv'>Probar Tasa Oficial BCV</a><br>"
       "👉 <a href='/test/taquilla_manual'>Probar Envío Manual de Taquilla"
       " Activa</a><br>"
-      "👉 <a href='/test/aviso_antiguo'>Probar Aviso de Taquilla Antiguo"
-      " (10am/2pm/5pm)</a><br>"
       "👉 <a href='/test/pollas'>Probar Aviso de Pollas (Minuto 10)</a><br>"
       "👉 <a href='/test/resultados'>Forzar Revisión de Resultados"
       " Individuales</a><br>"
@@ -157,6 +196,12 @@ def test_saludo():
   return "Prueba de Saludo Matutino ejecutada."
 
 
+@app.route("/test/publicidad")
+def test_publicidad():
+  enviar_anuncio_publicitario()
+  return "Prueba de Aviso Publicitario ejecutada."
+
+
 @app.route("/test/bcv")
 def test_bcv():
   enviar_tasa_dolar()
@@ -172,12 +217,6 @@ def test_taquilla_manual():
   else:
     enviar_telegram(caption_taquilla, disable_web_preview=True)
   return "Prueba de Taquilla Activa ejecutada (y estado marcado como activado)."
-
-
-@app.route("/test/aviso_antiguo")
-def test_aviso_antiguo():
-  enviar_aviso_taquilla()
-  return "Prueba de Aviso de Taquilla Antiguo ejecutada."
 
 
 @app.route("/test/pollas")
@@ -237,8 +276,8 @@ def enviar_telegram_foto(photo_id, caption):
 
 
 def limpiar_memoria_diaria():
-  global resultados_enviados, primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id
-  resultados_enviados.clear()
+  global horarios_enviados_hoy, primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id
+  horarios_enviados_hoy.clear()
   primera_ejecucion = True
   taquilla_activa_hoy = False
   imagen_taquilla_file_id = None
@@ -348,6 +387,10 @@ def enviar_saludo_matutino():
   )
 
 
+def enviar_anuncio_publicitario():
+  enviar_telegram(TEXTO_PUBLICITARIO, disable_web_preview=True)
+
+
 def enviar_tasa_dolar():
   try:
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -377,25 +420,6 @@ def enviar_tasa_dolar():
     )
   except Exception as e:
     print(f"Error BCV: {e}")
-
-
-def enviar_aviso_taquilla():
-  enviar_telegram(
-      "🎯 AGENCIA HAROLD JOSE 🎯\n"
-      "Tu centro de apuestas de confianza. Atendemos vía WhatsApp y Telegram.\n\n"
-      "📢 ¡AVISO IMPORTANTE PARA NUESTROS JUGADORES! 📢\n\n"
-      "Recuerda que para jugar con nosotros debes acceder primero al Canal de"
-      " WhatsApp para verificar si la taquilla se encuentra activa el día de"
-      " hoy:\n"
-      "👉 https://whatsapp.com/channel/0029Vaza7YIGzzKJq7as7s1T\n\n"
-      "📲 Si la taquilla está activa, puedes revisar nuestro catálogo y"
-      " escribirnos directamente:\n"
-      "🎟️ Catálogo y WhatsApp: https://wa.me/c/584124489363\n\n"
-      "💬 También estamos disponibles por Telegram:\n"
-      "👉 t.me/ag_haroldjose\n\n"
-      "¡Mucha suerte en sus jugadas! 🍀🔥",
-      disable_web_preview=True,
-  )
 
 
 def tarea_envio_programado_taquilla():
@@ -450,7 +474,7 @@ def enviar_mensaje_cierre():
 
 
 def verificar_resultados():
-  global resultados_enviados, primera_ejecucion
+  global horarios_enviados_hoy, primera_ejecucion
   try:
     headers = {
         "User-Agent": (
@@ -470,7 +494,6 @@ def verificar_resultados():
       tarjetas = soup.find_all(["div", "section"])
 
     nuevos_encontrados = []
-    keys_en_este_ciclo = set()  # Filtro estricto anti-duplicados por ciclo
 
     for tarjeta in tarjetas:
       nombre_loteria = ""
@@ -539,33 +562,29 @@ def verificar_resultados():
           continue
 
         resultado_final = limpiar_texto(match_res.group(1)).upper()
-        clave = (nombre_loteria, hora, resultado_final)
-        par_loteria_hora = (nombre_loteria, hora)
+
+        # Llave única absoluta de control: (Lotería y Hora)
+        clave_slot = (nombre_loteria.upper().strip(), hora.upper().strip())
 
         if primera_ejecucion:
-          resultados_enviados.add(clave)
+          horarios_enviados_hoy.add(clave_slot)
         else:
-          if (
-              clave not in resultados_enviados
-              and par_loteria_hora not in keys_en_este_ciclo
-          ):
-            ya_enviado_hora = any(
-                c[0] == nombre_loteria and c[1] == hora for c in resultados_enviados
-            )
-            if not ya_enviado_hora:
-              item_dict = {
-                  "loteria": nombre_loteria,
-                  "hora": hora,
-                  "resultado": resultado_final,
-              }
-              if item_dict not in nuevos_encontrados:
-                nuevos_encontrados.append(item_dict)
-                resultados_enviados.add(clave)
-                keys_en_este_ciclo.add(par_loteria_hora)
+          if clave_slot not in horarios_enviados_hoy:
+            item_dict = {
+                "loteria": nombre_loteria,
+                "hora": hora,
+                "resultado": resultado_final,
+            }
+            if item_dict not in nuevos_encontrados:
+              nuevos_encontrados.append(item_dict)
+              horarios_enviados_hoy.add(clave_slot)
 
     if primera_ejecucion:
       primera_ejecucion = False
-      print(f"✅ Sincronización inicial lista. Total: {len(resultados_enviados)}")
+      print(
+          f"✅ Sincronización inicial lista. Total de slots bloqueados:"
+          f" {len(horarios_enviados_hoy)}"
+      )
       return
 
     if nuevos_encontrados:
@@ -665,6 +684,11 @@ def iniciar_scheduler():
   scheduler.add_job(enviar_saludo_matutino, "cron", hour=7, minute=0)
   scheduler.add_job(enviar_tasa_dolar, "cron", hour=6, minute=30)
   scheduler.add_job(enviar_tasa_dolar, "cron", hour=18, minute=30)
+
+  # Envío automático del anuncio publicitario a las 7:00 AM, 3:00 PM y 6:00 PM
+  scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=7, minute=0)
+  scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=15, minute=0)
+  scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=18, minute=0)
 
   # Envío programado de taquilla a las 3:00 PM (15:00) sujeto a activación previa
   scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
