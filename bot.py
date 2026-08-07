@@ -83,8 +83,10 @@ resultados_enviados = set()
 primera_ejecucion = True
 ultima_hora_polla = None
 
+# Variables de estado diario para la Taquilla
 taquilla_activa_hoy = False
 imagen_taquilla_file_id = None
+
 caption_taquilla = (
     "✅ AG HAROLD JOSÉ ACTIVA ✅\n"
     "Ya estamos operativos brindando la mejor atención. Calidad, respaldo y"
@@ -237,11 +239,12 @@ def enviar_telegram_foto(photo_id, caption):
 
 
 def limpiar_memoria_diaria():
-  global resultados_enviados, primera_ejecucion, taquilla_activa_hoy
+  global resultados_enviados, primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id
   resultados_enviados.clear()
   primera_ejecucion = True
   taquilla_activa_hoy = False
-  print("🧹 Memoria limpiada para el nuevo día.")
+  imagen_taquilla_file_id = None
+  print("🧹 Memoria y estado de taquilla reiniciados para el nuevo día.")
 
 
 def enviar_saludo_madrugada():
@@ -273,30 +276,30 @@ def generar_piramide():
     )
 
   cuerpo_piramide = "\n".join(lineas_formateadas)
-  seed_val = int(ahora.strftime("%Y%m%d"))
+
+  # Semilla altamente dinámica para evitar repeticiones diarias idénticas
+  seed_val = int(ahora.strftime("%Y%m%d")) + ahora.hour * 37 + ahora.minute
   rnd = random.Random(seed_val)
 
   candidates = []
   for f in filas:
     for idx in range(len(f) - 1):
-      val = (f[idx] * 10 + f[idx + 1]) % 37
-      candidates.append(f"{val:02d}" if val != 0 else "0")
-      candidates.append("00")
+      val = (f[idx] * 10 + f[idx + 1] + rnd.randint(1, 9)) % 37
+      candidates.append(f"{val:02d}")
     for num in f:
-      val = (num * 7) % 37
-      candidates.append(f"{val:02d}" if val != 0 else "0")
-      candidates.append("00")
+      val2 = (num * 7 + rnd.randint(1, 9)) % 37
+      candidates.append(f"{val2:02d}")
 
   unique_candidates = []
   for c in candidates:
     if c not in unique_candidates:
       unique_candidates.append(c)
 
+  rnd.shuffle(unique_candidates)
+
   while len(unique_candidates) < 6:
-    r_val = rnd.randint(0, 36)
-    c_rand = (
-        f"{r_val:02d}" if r_val != 0 else ("0" if rnd.random() > 0.5 else "00")
-    )
+    val_rand = rnd.randint(0, 36)
+    c_rand = f"{val_rand:02d}"
     if c_rand not in unique_candidates:
       unique_candidates.append(c_rand)
 
@@ -343,22 +346,22 @@ def enviar_tasa_dolar():
   try:
     headers = {"User-Agent": "Mozilla/5.0"}
     response = requests.get(URL_BCV, headers=headers, timeout=15, verify=False)
-    precio_dolar = "742,23"
+    precio_dolar = "756,71"
     if response.status_code == 200:
       soup = BeautifulSoup(response.text, "html.parser")
       dolar_div = soup.find("div", id="dolar")
       if dolar_div and dolar_div.find("strong"):
         raw_precio = dolar_div.find("strong").get_text(strip=True)
-        cleaned_num = re.sub(r"[^\d,\.]", "", raw_precio)
-        if "," in cleaned_num:
-          parts = cleaned_num.split(",")
-          if len(parts) == 2 and len(parts[1]) > 2:
-            cleaned_num = f"{parts[0]},{parts[1][:2]}"
-        elif "." in cleaned_num:
-          parts = cleaned_num.split(".")
-          if len(parts) == 2 and len(parts[1]) > 2:
-            cleaned_num = f"{parts[0]},{parts[1][:2]}"
-        precio_dolar = cleaned_num if cleaned_num else raw_precio
+        # Limpieza robusta y formateo corto a 2 decimales exactos
+        cleaned = re.sub(r"[^\d,\.]", "", raw_precio)
+        cleaned = cleaned.replace(".", ",")
+        parts = cleaned.split(",")
+        if len(parts) >= 2:
+          integers = parts[0]
+          decimals = parts[1][:2]
+          precio_dolar = f"{integers},{decimals}"
+        elif len(parts) == 1 and parts[0]:
+          precio_dolar = parts[0]
 
     enviar_telegram(
         "💵 TASA OFICIAL BCV 💵\n\n"
@@ -395,8 +398,15 @@ def tarea_envio_programado_taquilla():
   if taquilla_activa_hoy:
     if imagen_taquilla_file_id:
       enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
+      print("✅ Taquilla activa reenviada automáticamente a las 3:00 PM.")
     else:
       enviar_telegram(caption_taquilla, disable_web_preview=True)
+      print("✅ Taquilla activa reenviada por texto a las 3:00 PM.")
+  else:
+    print(
+        "ℹ️ A las 3:00 PM la taquilla no fue activada en la mañana, se omite el"
+        " envío."
+    )
 
 
 def tarea_minuto_diez():
@@ -421,7 +431,7 @@ def tarea_minuto_diez():
 
 
 def enviar_mensaje_cierre():
-  global taquilla_activa_hoy
+  global taquilla_activa_hoy, imagen_taquilla_file_id
   enviar_telegram(
       "🎯 AGENCIA HAROLD JOSE 🎯\n\n"
       "🌙 ¡FINAL DE JORNADA! 🌙\n\n"
@@ -431,6 +441,7 @@ def enviar_mensaje_cierre():
       disable_web_preview=True,
   )
   taquilla_activa_hoy = False
+  imagen_taquilla_file_id = None
 
 
 def verificar_resultados():
@@ -561,6 +572,7 @@ def verificar_resultados():
     print(f"⚠️ Error en resultados: {e}")
 
 
+# --- MANEJADOR DE TAQUILLA ACTIVA DESDE EL CANAL PRIVADO ---
 def procesar_activacion_taquilla(message):
   global taquilla_activa_hoy, imagen_taquilla_file_id
   caption = message.caption or message.text or ""
@@ -569,7 +581,7 @@ def procesar_activacion_taquilla(message):
       taquilla_activa_hoy = True
       imagen_taquilla_file_id = message.photo[-1].file_id
       enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
-      print("✅ Taquilla activada con imagen.")
+      print("✅ Taquilla activada y publicada con la imagen adjunta.")
     else:
       taquilla_activa_hoy = True
       enviar_telegram(caption_taquilla, disable_web_preview=True)
@@ -600,6 +612,7 @@ def handle_text_messages(message):
     print("✅ Taquilla activada por texto.")
 
 
+# --- MANEJADOR DE RESULTADOS PROGRAMADOS / ANIMALITOS ---
 def procesar_limpieza_y_envio_animalitos(text):
   texto_lower = text.lower()
   if (
@@ -641,7 +654,10 @@ def iniciar_scheduler():
   scheduler.add_job(enviar_saludo_matutino, "cron", hour=7, minute=0)
   scheduler.add_job(enviar_tasa_dolar, "cron", hour=6, minute=30)
   scheduler.add_job(enviar_tasa_dolar, "cron", hour=18, minute=30)
+
+  # Envío programado de taquilla a las 3:00 PM (15:00) sujeto a activación previa
   scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
+
   scheduler.add_job(tarea_minuto_diez, "cron", hour="7-17", minute=10)
   scheduler.add_job(enviar_mensaje_cierre, "cron", hour=21, minute=10)
   scheduler.add_job(verificar_resultados, "interval", seconds=30)
