@@ -277,17 +277,22 @@ def generar_piramide():
 
   cuerpo_piramide = "\n".join(lineas_formateadas)
 
-  # Semilla altamente dinámica para evitar repeticiones diarias idénticas
-  seed_val = int(ahora.strftime("%Y%m%d")) + ahora.hour * 37 + ahora.minute
+  # Semilla altamente dinámica basada en el día, hora, minuto y segundo para garantizar cambio diario absoluto
+  seed_val = (
+      int(ahora.strftime("%Y%m%d"))
+      + ahora.hour * 100
+      + ahora.minute
+      + random.randint(1000, 9999)
+  )
   rnd = random.Random(seed_val)
 
   candidates = []
   for f in filas:
     for idx in range(len(f) - 1):
-      val = (f[idx] * 10 + f[idx + 1] + rnd.randint(1, 9)) % 37
+      val = (f[idx] * 10 + f[idx + 1] + rnd.randint(1, 15)) % 37
       candidates.append(f"{val:02d}")
     for num in f:
-      val2 = (num * 7 + rnd.randint(1, 9)) % 37
+      val2 = (num * 7 + rnd.randint(1, 15)) % 37
       candidates.append(f"{val2:02d}")
 
   unique_candidates = []
@@ -465,6 +470,7 @@ def verificar_resultados():
       tarjetas = soup.find_all(["div", "section"])
 
     nuevos_encontrados = []
+    keys_en_este_ciclo = set()  # Filtro estricto anti-duplicados por ciclo
 
     for tarjeta in tarjetas:
       nombre_loteria = ""
@@ -534,11 +540,15 @@ def verificar_resultados():
 
         resultado_final = limpiar_texto(match_res.group(1)).upper()
         clave = (nombre_loteria, hora, resultado_final)
+        par_loteria_hora = (nombre_loteria, hora)
 
         if primera_ejecucion:
           resultados_enviados.add(clave)
         else:
-          if clave not in resultados_enviados:
+          if (
+              clave not in resultados_enviados
+              and par_loteria_hora not in keys_en_este_ciclo
+          ):
             ya_enviado_hora = any(
                 c[0] == nombre_loteria and c[1] == hora for c in resultados_enviados
             )
@@ -551,6 +561,7 @@ def verificar_resultados():
               if item_dict not in nuevos_encontrados:
                 nuevos_encontrados.append(item_dict)
                 resultados_enviados.add(clave)
+                keys_en_este_ciclo.add(par_loteria_hora)
 
     if primera_ejecucion:
       primera_ejecucion = False
