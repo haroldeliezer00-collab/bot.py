@@ -34,50 +34,23 @@ scheduler = BackgroundScheduler(timezone="America/Caracas")
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
 
-# Listado oficial de loterías ordenadas de mayor a menor longitud
-LOTERIAS_VALIDAS = sorted(
-    [
-        "LOTTO ACTIVO RD INT",
-        "LOTTO ACTIVO RDOMINICANA",
-        "EL GUACHARITO MILLONARIO",
-        "ZOOLOGICO ACTIVO",
-        "GRANJA MILLONARIA",
-        "CENTENA ANIMAL",
-        "GUACHARO ACTIVO",
-        "CHANCE ANIMAL",
-        "RULETON VENEZUELA",
-        "RULETON COLOMBIA",
-        "LOTTO LA QUINTA",
-        "GRANJITA PLUS",
-        "MONJE MILLONARIO",
-        "LOTO ANIMALITO",
-        "LOTTO PANTERA",
-        "RULETON PERU",
-        "LA RICACHONA",
-        "CENTENA PLUS",
-        "LOTTO ACTIVO",
-        "LA GRANJITA",
-        "SELVA PLUS",
-        "CONDOR GANA",
-        "LOTTO CHAIMA",
-        "CAZALOTON",
-        "TROPI GANA",
-        "FRUITAGANA",
-        "GRANJAZO",
-        "PANDA PLUS",
-        "MEGA ANIMAL",
-        "LOTTO GATO",
-        "GATAZO",
-        "GUACA ACTIVA",
-        "LOTTO REAL",
-        "LOTTOMAX",
-        "CALAMAR A",
-        "CALAMAR B",
-        "MEGA GUACA",
-    ],
-    key=len,
-    reverse=True,
-)
+# Enlaces oficiales adicionales para respaldo/verificación
+ENLACES_OFICIALES = {
+    "LOTTO ACTIVO": "https://www.lottoactivo.com/resultados/lotto_activo/",
+    "GUACHARO ACTIVO": "https://www.guacharoactivo.com.ve/resultados",
+    "LOTO CHAIMA": "https://lotochaima.com/",
+    "LA GRANJITA": "https://lagranjitaonline.com/",
+    "SELVA PLUS": "https://www.selvaplus.com/resultados",
+    "MONJE MILLONARIO": (
+        "https://www.lottoactivo.com/resultados/lottoactivo2(monjemillonario)/"
+    ),
+    "LOTTO ACTIVO RD INTERNACIONAL": (
+        "https://www.lottoactivo.com/resultados/lotto_activo_internacional/"
+    ),
+    "GUACA ACTIVA": "https://lotery.winbigvzla.com/resultados",
+    "MEGA GUACA": "https://lotery.winbigvzla.com/resultados",
+    "EL GUACHARITO MILLONARIO": "https://elguacharitomillonario.com/",
+}
 
 resultados_enviados = set()
 primera_ejecucion = True
@@ -244,7 +217,7 @@ def limpiar_memoria_diaria():
   primera_ejecucion = True
   taquilla_activa_hoy = False
   imagen_taquilla_file_id = None
-  print("🧹 Memoria y estado de taquilla reiniciados para el nuevo día.")
+  print("🧹 Memoria limpiada para el nuevo día.")
 
 
 def enviar_saludo_madrugada():
@@ -277,12 +250,12 @@ def generar_piramide():
 
   cuerpo_piramide = "\n".join(lineas_formateadas)
 
-  # Semilla altamente dinámica basada en el día, hora, minuto y segundo para garantizar cambio diario absoluto
+  # Semilla dinámica para asegurar que los datos claves varíen cada día
   seed_val = (
       int(ahora.strftime("%Y%m%d"))
       + ahora.hour * 100
       + ahora.minute
-      + random.randint(1000, 9999)
+      + random.randint(100, 999)
   )
   rnd = random.Random(seed_val)
 
@@ -290,10 +263,12 @@ def generar_piramide():
   for f in filas:
     for idx in range(len(f) - 1):
       val = (f[idx] * 10 + f[idx + 1] + rnd.randint(1, 15)) % 37
-      candidates.append(f"{val:02d}")
+      candidates.append(f"{val:02d}" if val != 0 else "0")
+      candidates.append("00")
     for num in f:
-      val2 = (num * 7 + rnd.randint(1, 15)) % 37
-      candidates.append(f"{val2:02d}")
+      val = (num * 7 + rnd.randint(1, 15)) % 37
+      candidates.append(f"{val:02d}" if val != 0 else "0")
+      candidates.append("00")
 
   unique_candidates = []
   for c in candidates:
@@ -303,8 +278,10 @@ def generar_piramide():
   rnd.shuffle(unique_candidates)
 
   while len(unique_candidates) < 6:
-    val_rand = rnd.randint(0, 36)
-    c_rand = f"{val_rand:02d}"
+    r_val = rnd.randint(0, 36)
+    c_rand = (
+        f"{r_val:02d}" if r_val != 0 else ("0" if rnd.random() > 0.5 else "00")
+    )
     if c_rand not in unique_candidates:
       unique_candidates.append(c_rand)
 
@@ -357,7 +334,6 @@ def enviar_tasa_dolar():
       dolar_div = soup.find("div", id="dolar")
       if dolar_div and dolar_div.find("strong"):
         raw_precio = dolar_div.find("strong").get_text(strip=True)
-        # Limpieza robusta y formateo corto a 2 decimales exactos
         cleaned = re.sub(r"[^\d,\.]", "", raw_precio)
         cleaned = cleaned.replace(".", ",")
         parts = cleaned.split(",")
@@ -459,6 +435,15 @@ def verificar_resultados():
     }
     respuesta = requests.get(URL_LOTERIA, headers=headers, timeout=15)
     if respuesta.status_code != 200:
+      for nombre_ofi, url_ofi in ENLACES_OFICIALES.items():
+        try:
+          res_ofi = requests.get(
+              url_ofi, headers=headers, timeout=10, verify=False
+          )
+          if res_ofi.status_code == 200:
+            pass
+        except:
+          pass
       return
 
     soup = BeautifulSoup(respuesta.text, "html.parser")
@@ -470,7 +455,6 @@ def verificar_resultados():
       tarjetas = soup.find_all(["div", "section"])
 
     nuevos_encontrados = []
-    keys_en_este_ciclo = set()  # Filtro estricto anti-duplicados por ciclo
 
     for tarjeta in tarjetas:
       nombre_loteria = ""
@@ -540,15 +524,11 @@ def verificar_resultados():
 
         resultado_final = limpiar_texto(match_res.group(1)).upper()
         clave = (nombre_loteria, hora, resultado_final)
-        par_loteria_hora = (nombre_loteria, hora)
 
         if primera_ejecucion:
           resultados_enviados.add(clave)
         else:
-          if (
-              clave not in resultados_enviados
-              and par_loteria_hora not in keys_en_este_ciclo
-          ):
+          if clave not in resultados_enviados:
             ya_enviado_hora = any(
                 c[0] == nombre_loteria and c[1] == hora for c in resultados_enviados
             )
@@ -561,7 +541,6 @@ def verificar_resultados():
               if item_dict not in nuevos_encontrados:
                 nuevos_encontrados.append(item_dict)
                 resultados_enviados.add(clave)
-                keys_en_este_ciclo.add(par_loteria_hora)
 
     if primera_ejecucion:
       primera_ejecucion = False
