@@ -637,4 +637,52 @@ def handle_direct_messages_animalitos(message):
 def iniciar_scheduler():
   scheduler.add_job(limpiar_memoria_diaria, "cron", hour=0, minute=0)
   scheduler.add_job(enviar_saludo_madrugada, "cron", hour=6, minute=30)
-  scheduler.add_job(envia
+  scheduler.add_job(enviar_piramide_diaria, "cron", hour=6, minute=31)
+  scheduler.add_job(enviar_saludo_matutino, "cron", hour=7, minute=0)
+  scheduler.add_job(enviar_tasa_dolar, "cron", hour=6, minute=30)
+  scheduler.add_job(enviar_tasa_dolar, "cron", hour=18, minute=30)
+  scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
+  scheduler.add_job(tarea_minuto_diez, "cron", hour="7-17", minute=10)
+  scheduler.add_job(enviar_mensaje_cierre, "cron", hour=21, minute=10)
+  scheduler.add_job(verificar_resultados, "interval", seconds=30)
+
+  scheduler.start()
+  verificar_resultados()
+
+
+def iniciar_polling_bot():
+  while True:
+    try:
+      bot.infinity_polling(
+          skip_pending=True,
+          interval=3,
+          timeout=20,
+          allowed_updates=[
+              "message",
+              "edited_message",
+              "channel_post",
+              "edited_channel_post",
+          ],
+      )
+    except Exception as e:
+      print(f"⚠️ Error en polling: {e}")
+      time.sleep(5)
+
+
+if __name__ == "__main__":
+  try:
+    print("🚀 Iniciando aplicación principal...")
+    t_schedule = Thread(target=iniciar_scheduler)
+    t_schedule.daemon = True
+    t_schedule.start()
+
+    t_bot = Thread(target=iniciar_polling_bot)
+    t_bot.daemon = True
+    t_bot.start()
+    print("✅ Hilos iniciados correctamente.")
+
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, use_reloader=False)
+  except Exception as e:
+    print(f"❌ Error crítico en ejecución principal: {e}")
+    traceback.print_exc()
