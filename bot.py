@@ -56,7 +56,7 @@ caption_taquilla = (
     "¡Mucho éxito en la jornada de hoy! 🍀✨"
 )
 
-# Texto publicitario solicitado para enviar a las 7 am, 3 pm y 6 pm
+# Nuevo texto publicitario actualizado solicitado
 TEXTO_PUBLICITARIO = (
     "🔥 ¡ATENCIÓN JUGADORES! 🔥\n\n"
     "¿Buscas variedad real, seriedad y pagos seguros al instante? No pierdas"
@@ -136,7 +136,7 @@ TEXTO_PUBLICITARIO = (
     "• BINGO MILLONARIO PLUS\n"
     "‎➖➖➖➖➖➖➖➖➖➖\n"
     "📢 ¡Únete a nuestra comunidad oficial! 🎲🔥\n"
-    "Entra ya a nuestro canal de Telegram para ver todas las pollas:\n"
+    "Entra ya a nuestro canal de Telegram para ver todas los resultados:\n"
     f"👉 {ENLACE_CANAL}"
 )
 
