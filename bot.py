@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 import os
 import random
 import re
@@ -33,14 +34,72 @@ scheduler = BackgroundScheduler(timezone="America/Caracas")
 
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
+STATE_FILE = "bot_state.json"
 
-# Control estricto anti-duplicados por ciclo diario
+# Control estricto anti-duplicados y memoria
 horarios_enviados_hoy = set()
 primera_ejecucion = True
 ultima_hora_polla = None
 
 taquilla_activa_hoy = False
 imagen_taquilla_file_id = None
+
+
+def cargar_estado_disco():
+  global horarios_enviados_hoy, primera_ejecucion, ultima_hora_polla, taquilla_activa_hoy
+  if os.path.exists(STATE_FILE):
+    try:
+      with open(STATE_FILE, "r") as f:
+        data = json.load(f)
+        hoy_str = datetime.now().strftime("%Y-%m-%d")
+        if data.get("fecha") == hoy_str:
+          horarios_enviados_hoy = set(tuple(x) for x in data.get("enviados", []))
+          primera_ejecucion = data.get("primera_ejecucion", False)
+          if data.get("ultima_polla_hora"):
+            h_data = data.get("ultima_polla_hora")
+            ultima_hora_polla = (
+                datetime.strptime(h_data[0], "%Y-%m-%d").date(),
+                h_data[1],
+            )
+          taquilla_activa_hoy = data.get("taquilla_activa", False)
+          print(
+              f"📂 Estado cargado desde disco. Slots bloqueados:"
+              f" {len(horarios_enviados_hoy)}"
+          )
+          return
+    except Exception as e:
+      print(f"⚠️ Error cargando estado: {e}")
+  horarios_enviados_hoy = set()
+  primera_ejecucion = True
+  ultima_hora_polla = None
+  taquilla_activa_hoy = False
+
+
+def guardar_estado_disco():
+  try:
+    hoy_str = datetime.now().strftime("%Y-%m-%d")
+    polla_serializable = None
+    if ultima_hora_polla:
+      polla_serializable = [
+          str(ultima_hora_polla[0]),
+          ultima_hora_polla[1],
+      ]
+    data = {
+        "fecha": hoy_str,
+        "enviados": list(list(x) for x in horarios_enviados_hoy),
+        "primera_ejecucion": primera_ejecucion,
+        "ultima_polla_hora": polla_serializable,
+        "taquilla_activa": taquilla_activa_hoy,
+    }
+    with open(STATE_FILE, "w") as f:
+      json.dump(data, f)
+  except Exception as e:
+    print(f"⚠️ Error guardando estado: {e}")
+
+
+# Cargar estado inicial al arrancar
+cargar_estado_disco()
+
 caption_taquilla = (
     "✅ AG HAROLD JOSÉ ACTIVA ✅\n"
     "Ya estamos operativos brindando la mejor atención. Calidad, respaldo y"
@@ -219,6 +278,7 @@ def test_bcv():
 def test_taquilla_manual():
   global taquilla_activa_hoy, imagen_taquilla_file_id
   taquilla_activa_hoy = True
+  guardar_estado_disco()
   if imagen_taquilla_file_id:
     enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
   else:
@@ -283,12 +343,15 @@ def enviar_telegram_foto(photo_id, caption):
 
 
 def limpiar_memoria_diaria():
-  global horarios_enviados_hoy, primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id
+  global horarios_enviados_hoy, primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id, ultima_hora_polla
   horarios_enviados_hoy.clear()
   primera_ejecucion = True
   taquilla_activa_hoy = False
   imagen_taquilla_file_id = None
-  print("🧹 Memoria limpiada para el nuevo día.")
+  ultima_hora_polla = None
+  if os.path.exists(STATE_FILE):
+    os.remove(STATE_FILE)
+  print("🧹 Memoria y archivo de disco limpiados para el nuevo día.")
 
 
 def enviar_saludo_madrugada():
@@ -379,31 +442,19 @@ def enviar_piramide_diaria():
 
 def generar_combinacion_ganadora():
   ahora = datetime.now()
-  # Semilla matemática estricta basada 100% en la fecha actual (AAAAMMDD)
   seed_val = int(ahora.strftime("%Y%m%d"))
   rnd = random.Random(seed_val)
-
-  # Creamos la lista completa del 00 al 36 y la barajamos con la semilla de la fecha
   disponibles = list(range(37))
   rnd.shuffle(disponibles)
-
-  # Seleccionamos 7 números ÚNICOS (sin que se repita ninguno en todo el mensaje)
   seleccionados = [f"{n:02d}" for n in disponibles[:7]]
-
-  fijo1 = seleccionados[0]
-  fijo2 = seleccionados[1]
-  par1 = seleccionados[2]
-  par2 = seleccionados[3]
-  trip1 = seleccionados[4]
-  trip2 = seleccionados[5]
-  trip3 = seleccionados[6]
 
   return (
       "🎯 COMBINACIÓN GANADORA - AGENCIA HAROLD JOSÉ 🎯\n"
       "🔥 ¡Datos exclusivos y directos para asegurar tus jugadas:\n\n"
-      f"📌 Fijos del Día: {fijo1} y {fijo2}\n"
-      f"📌 El Par: {par1} - {par2}\n"
-      f"📌 La Tripleta: {trip1} - {trip2} - {trip3}\n\n"
+      f"📌 Fijos del Día: {seleccionados[0]} y {seleccionados[1]}\n"
+      f"📌 El Par: {seleccionados[2]} - {seleccionados[3]}\n"
+      f"📌 La Tripleta: {seleccionados[4]} - {seleccionados[5]} -"
+      f" {seleccionados[6]}\n\n"
       "📲 WHATSAPP: 0412-4489363\n"
       f"{ENLACE_CANAL}\n\n"
       "¡A cobrar se ha dicho! 🍀✨"
@@ -418,7 +469,7 @@ def enviar_saludo_matutino():
   enviar_telegram(
       "🎯 AGENCIA HAROLD JOSE 🎯\n\n"
       "🌅 ¡Buenos días a todos! 🌅\n\n"
-      "Ya arrancamos un nuevo día con la mejor energía. Por hiero estaremos"
+      "Ya arrancamos un nuevo día con la mejor energía. Por aquí estaremos"
       " compartiendo todos los resultados de los animalitos a medida que vayan"
       " saliendo.\n\n"
       "📢 Nuestros canales oficiales:\n"
@@ -493,6 +544,7 @@ def tarea_minuto_diez():
     clave_hora = (ahora.date(), ahora.hour)
     if ultima_hora_polla != clave_hora:
       ultima_hora_polla = clave_hora
+      guardar_estado_disco()  # Guardar en disco para evitar reenvíos si Render duerme la app
       enviar_telegram(
           "🎯 AGENCIA HAROLD JOSE 🎯\n\n"
           "📢 ¡Pollas actualizadas!\n"
@@ -504,7 +556,7 @@ def tarea_minuto_diez():
 
 
 def enviar_mensaje_cierre():
-  global taquilla_activa_hoy, imagen_taquilla_file_id
+  global taquilla_activa_hoy, imagen_taquilla_file_id, ultima_hora_polla
   enviar_telegram(
       "🎯 AGENCIA HAROLD JOSE 🎯\n\n"
       "🌙 ¡FINAL DE JORNADA! 🌙\n\n"
@@ -515,6 +567,8 @@ def enviar_mensaje_cierre():
   )
   taquilla_activa_hoy = False
   imagen_taquilla_file_id = None
+  ultima_hora_polla = None
+  guardar_estado_disco()
 
 
 def verificar_resultados():
@@ -621,9 +675,11 @@ def verificar_resultados():
             if item_dict not in nuevos_encontrados:
               nuevos_encontrados.append(item_dict)
               horarios_enviados_hoy.add(clave_slot)
+              guardar_estado_disco()  # Guardar de inmediato en disco
 
     if primera_ejecucion:
       primera_ejecucion = False
+      guardar_estado_disco()
       print(
           f"✅ Sincronización inicial lista. Total de slots bloqueados:"
           f" {len(horarios_enviados_hoy)}"
@@ -653,10 +709,12 @@ def procesar_activacion_taquilla(message):
     if message.photo:
       taquilla_activa_hoy = True
       imagen_taquilla_file_id = message.photo[-1].file_id
+      guardar_estado_disco()
       enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
       print("✅ Taquilla activada y publicada con la imagen adjunta.")
     else:
       taquilla_activa_hoy = True
+      guardar_estado_disco()
       enviar_telegram(caption_taquilla, disable_web_preview=True)
       print("✅ Taquilla activada por texto.")
 
@@ -678,6 +736,7 @@ def handle_text_messages(message):
   if "taquilla activa" in (message.text or "").lower():
     global taquilla_activa_hoy
     taquilla_activa_hoy = True
+    guardar_estado_disco()
     if imagen_taquilla_file_id:
       enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
     else:
@@ -729,12 +788,10 @@ def iniciar_scheduler():
   scheduler.add_job(enviar_tasa_dolar, "cron", hour=6, minute=30)
   scheduler.add_job(enviar_tasa_dolar, "cron", hour=18, minute=30)
 
-  # Envío automático del anuncio publicitario a las 7:00 AM, 3:00 PM y 6:00 PM
   scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=7, minute=0)
   scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=15, minute=0)
   scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=18, minute=0)
 
-  # Envío programado de taquilla a las 3:00 PM (15:00) sujeto a activación previa
   scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
 
   scheduler.add_job(tarea_minuto_diez, "cron", hour="7-17", minute=10)
