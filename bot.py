@@ -379,25 +379,24 @@ def enviar_piramide_diaria():
 
 def generar_combinacion_ganadora():
   ahora = datetime.now()
-  seed_val = int(ahora.strftime("%Y%m%d")) + 77
+  # Semilla matemática estricta basada 100% en la fecha actual (AAAAMMDD)
+  seed_val = int(ahora.strftime("%Y%m%d"))
   rnd = random.Random(seed_val)
 
-  fijo1 = f"{rnd.randint(0, 36):02d}"
-  fijo2 = f"{rnd.randint(0, 36):02d}"
-  while fijo2 == fijo1:
-    fijo2 = f"{rnd.randint(0, 36):02d}"
+  # Creamos la lista completa del 00 al 36 y la barajamos con la semilla de la fecha
+  disponibles = list(range(37))
+  rnd.shuffle(disponibles)
 
-  par1 = f"{rnd.randint(0, 36):02d}"
-  par2 = f"{rnd.randint(0, 36):02d}"
-  while par2 == par1:
-    par2 = f"{rnd.randint(0, 36):02d}"
+  # Seleccionamos 7 números ÚNICOS (sin que se repita ninguno en todo el mensaje)
+  seleccionados = [f"{n:02d}" for n in disponibles[:7]]
 
-  trip1 = f"{rnd.randint(0, 36):02d}"
-  trip2 = f"{rnd.randint(0, 36):02d}"
-  trip3 = f"{rnd.randint(0, 36):02d}"
-  while trip2 == trip1 or trip3 == trip1 or trip3 == trip2:
-    trip2 = f"{rnd.randint(0, 36):02d}"
-    trip3 = f"{rnd.randint(0, 36):02d}"
+  fijo1 = seleccionados[0]
+  fijo2 = seleccionados[1]
+  par1 = seleccionados[2]
+  par2 = seleccionados[3]
+  trip1 = seleccionados[4]
+  trip2 = seleccionados[5]
+  trip3 = seleccionados[6]
 
   return (
       "🎯 COMBINACIÓN GANADORA - AGENCIA HAROLD JOSÉ 🎯\n"
@@ -419,7 +418,7 @@ def enviar_saludo_matutino():
   enviar_telegram(
       "🎯 AGENCIA HAROLD JOSE 🎯\n\n"
       "🌅 ¡Buenos días a todos! 🌅\n\n"
-      "Ya arrancamos un nuevo día con la mejor energía. Por aquí estaremos"
+      "Ya arrancamos un nuevo día con la mejor energía. Por hiero estaremos"
       " compartiendo todos los resultados de los animalitos a medida que vayan"
       " saliendo.\n\n"
       "📢 Nuestros canales oficiales:\n"
@@ -725,9 +724,7 @@ def iniciar_scheduler():
   scheduler.add_job(limpiar_memoria_diaria, "cron", hour=0, minute=0)
   scheduler.add_job(enviar_saludo_madrugada, "cron", hour=6, minute=30)
   scheduler.add_job(enviar_piramide_diaria, "cron", hour=6, minute=31)
-  scheduler.add_job(
-      enviar_combinacion_ganadora, "cron", hour=6, minute=45
-  )  # NUEVO AVISO A LAS 6:45 AM
+  scheduler.add_job(enviar_combinacion_ganadora, "cron", hour=6, minute=45)
   scheduler.add_job(enviar_saludo_matutino, "cron", hour=7, minute=0)
   scheduler.add_job(enviar_tasa_dolar, "cron", hour=6, minute=30)
   scheduler.add_job(enviar_tasa_dolar, "cron", hour=18, minute=30)
