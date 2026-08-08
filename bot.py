@@ -56,7 +56,6 @@ caption_taquilla = (
     "¡Mucho éxito en la jornada de hoy! 🍀✨"
 )
 
-# Nuevo texto publicitario actualizado solicitado
 TEXTO_PUBLICITARIO = (
     "🔥 ¡ATENCIÓN JUGADORES! 🔥\n\n"
     "¿Buscas variedad real, seriedad y pagos seguros al instante? No pierdas"
@@ -166,6 +165,8 @@ def home():
       "<b>Enlaces de prueba rápida (Test de cada opción):</b><br>"
       "👉 <a href='/test/madrugada'>Probar Saludo de Madrugada (6:30 AM)</a><br>"
       "👉 <a href='/test/piramide'>Probar Pirámide Numérica (6:31 AM)</a><br>"
+      "👉 <a href='/test/combinacion'>Probar Combinación Ganadora (6:45"
+      " AM)</a><br>"
       "👉 <a href='/test/saludo'>Probar Saludo Matutino (7:00 AM)</a><br>"
       "👉 <a href='/test/publicidad'>Probar Aviso Publicitario (7am/3pm/6pm)</a><br>"
       "👉 <a href='/test/bcv'>Probar Tasa Oficial BCV</a><br>"
@@ -188,6 +189,12 @@ def test_madrugada():
 def test_piramide():
   enviar_piramide_diaria()
   return "Prueba de Pirámide Numérica ejecutada."
+
+
+@app.route("/test/combinacion")
+def test_combinacion():
+  enviar_combinacion_ganadora()
+  return "Prueba de Combinación Ganadora ejecutada."
 
 
 @app.route("/test/saludo")
@@ -368,6 +375,44 @@ def generar_piramide():
 
 def enviar_piramide_diaria():
   enviar_telegram(generar_piramide(), disable_web_preview=True)
+
+
+def generar_combinacion_ganadora():
+  ahora = datetime.now()
+  seed_val = int(ahora.strftime("%Y%m%d")) + 77
+  rnd = random.Random(seed_val)
+
+  fijo1 = f"{rnd.randint(0, 36):02d}"
+  fijo2 = f"{rnd.randint(0, 36):02d}"
+  while fijo2 == fijo1:
+    fijo2 = f"{rnd.randint(0, 36):02d}"
+
+  par1 = f"{rnd.randint(0, 36):02d}"
+  par2 = f"{rnd.randint(0, 36):02d}"
+  while par2 == par1:
+    par2 = f"{rnd.randint(0, 36):02d}"
+
+  trip1 = f"{rnd.randint(0, 36):02d}"
+  trip2 = f"{rnd.randint(0, 36):02d}"
+  trip3 = f"{rnd.randint(0, 36):02d}"
+  while trip2 == trip1 or trip3 == trip1 or trip3 == trip2:
+    trip2 = f"{rnd.randint(0, 36):02d}"
+    trip3 = f"{rnd.randint(0, 36):02d}"
+
+  return (
+      "🎯 COMBINACIÓN GANADORA - AGENCIA HAROLD JOSÉ 🎯\n"
+      "🔥 ¡Datos exclusivos y directos para asegurar tus jugadas:\n\n"
+      f"📌 Fijos del Día: {fijo1} y {fijo2}\n"
+      f"📌 El Par: {par1} - {par2}\n"
+      f"📌 La Tripleta: {trip1} - {trip2} - {trip3}\n\n"
+      "📲 WHATSAPP: 0412-4489363\n"
+      f"{ENLACE_CANAL}\n\n"
+      "¡A cobrar se ha dicho! 🍀✨"
+  )
+
+
+def enviar_combinacion_ganadora():
+  enviar_telegram(generar_combinacion_ganadora(), disable_web_preview=True)
 
 
 def enviar_saludo_matutino():
@@ -563,7 +608,6 @@ def verificar_resultados():
 
         resultado_final = limpiar_texto(match_res.group(1)).upper()
 
-        # Llave única absoluta de control: (Lotería y Hora)
         clave_slot = (nombre_loteria.upper().strip(), hora.upper().strip())
 
         if primera_ejecucion:
@@ -681,6 +725,9 @@ def iniciar_scheduler():
   scheduler.add_job(limpiar_memoria_diaria, "cron", hour=0, minute=0)
   scheduler.add_job(enviar_saludo_madrugada, "cron", hour=6, minute=30)
   scheduler.add_job(enviar_piramide_diaria, "cron", hour=6, minute=31)
+  scheduler.add_job(
+      enviar_combinacion_ganadora, "cron", hour=6, minute=45
+  )  # NUEVO AVISO A LAS 6:45 AM
   scheduler.add_job(enviar_saludo_matutino, "cron", hour=7, minute=0)
   scheduler.add_job(enviar_tasa_dolar, "cron", hour=6, minute=30)
   scheduler.add_job(enviar_tasa_dolar, "cron", hour=18, minute=30)
