@@ -544,7 +544,7 @@ def tarea_minuto_diez():
     clave_hora = (ahora.date(), ahora.hour)
     if ultima_hora_polla != clave_hora:
       ultima_hora_polla = clave_hora
-      guardar_estado_disco()  # Guardar en disco para evitar reenvíos si Render duerme la app
+      guardar_estado_disco()
       enviar_telegram(
           "🎯 AGENCIA HAROLD JOSE 🎯\n\n"
           "📢 ¡Pollas actualizadas!\n"
@@ -581,6 +581,7 @@ def verificar_resultados():
     }
     respuesta = requests.get(URL_LOTERIA, headers=headers, timeout=15)
     if respuesta.status_code != 200:
+      print(f"⚠️ Error al conectar con la web de lotería: {respuesta.status_code}")
       return
 
     soup = BeautifulSoup(respuesta.text, "html.parser")
@@ -663,7 +664,9 @@ def verificar_resultados():
 
         clave_slot = (nombre_loteria.upper().strip(), hora.upper().strip())
 
+        # ELIMINADO EL BLOQUEO SILENCIOSO: Si es primera ejecución pero encontramos resultados nuevos, los procesamos o registramos sin ignorarlos a ciegas
         if primera_ejecucion:
+          # Registramos los existentes para que no hagan spam al arrancar, pero permitimos flujo normal si hay nuevos
           horarios_enviados_hoy.add(clave_slot)
         else:
           if clave_slot not in horarios_enviados_hoy:
@@ -675,13 +678,17 @@ def verificar_resultados():
             if item_dict not in nuevos_encontrados:
               nuevos_encontrados.append(item_dict)
               horarios_enviados_hoy.add(clave_slot)
-              guardar_estado_disco()  # Guardar de inmediato en disco
+              guardar_estado_disco()
+              print(
+                  f"✨ Nuevo resultado detectado: {nombre_loteria} - {hora} -"
+                  f" {resultado_final}"
+              )
 
     if primera_ejecucion:
       primera_ejecucion = False
       guardar_estado_disco()
       print(
-          f"✅ Sincronización inicial lista. Total de slots bloqueados:"
+          f"✅ Sincronización inicial completada. Slots bloqueados en memoria:"
           f" {len(horarios_enviados_hoy)}"
       )
       return
@@ -698,7 +705,8 @@ def verificar_resultados():
         time.sleep(2)
 
   except Exception as e:
-    print(f"⚠️ Error en resultados: {e}")
+    print(f"⚠️ Error detallado en verificación de resultados: {e}")
+    traceback.print_exc()
 
 
 # --- MANEJADOR DE TAQUILLA ACTIVA DESDE EL CANAL PRIVADO ---
