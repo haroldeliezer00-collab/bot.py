@@ -23,9 +23,9 @@ except Exception as e:
 # Desactivar advertencias de certificados SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Credenciales y canal de pruebas configurado
+# Credenciales y canal principal configurado
 TOKEN = "8728747633:AAHakMFznhlpK6QbkZinctgbl131wE2hIeI"
-CANAL = "@pruebajsj"  # Canal de pruebas indicado
+CANAL = "@resultadosagharoldjose"  # Canal oficial de producción indicado
 ENLACE_CANAL = "https://t.me/resultadosagharoldjose"
 ENLACE_POLLAS = "https://t.me/pollasydupletas"
 
@@ -194,7 +194,7 @@ TEXTO_PUBLICITARIO = (
     "• BINGO MILLONARIO PLUS\n"
     "‎➖➖➖➖➖➖➖➖➖➖\n"
     "📢 ¡Únete a nuestra comunidad oficial! 🎲🔥\n"
-    "Entra ya a nuestro canal de Telegram para ver todas los resultados:\n"
+    "Entra ya a nuestro canal de Telegram para ver todos los resultados:\n"
     f"👉 {ENLACE_CANAL}"
 )
 
@@ -218,8 +218,8 @@ def home():
       else "DESACTIVADA 🔴 (No laborando)"
   )
   return (
-      f"¡El bot de resultados AG HAROLD JOSE está activo apuntando al canal de"
-      f" pruebas {CANAL}!<br><br>"
+      f"¡El bot de resultados AG HAROLD JOSE está activo apuntando al canal"
+      f" oficial {CANAL}!<br><br>"
       f"<b>Estado del aviso de taquilla de hoy:</b> {estado_tag}<br><br>"
       "<b>Enlaces de prueba rápida (Test de cada opción):</b><br>"
       "👉 <a href='/test/madrugada'>Probar Saludo de Madrugada (6:30 AM)</a><br>"
@@ -664,9 +664,7 @@ def verificar_resultados():
 
         clave_slot = (nombre_loteria.upper().strip(), hora.upper().strip())
 
-        # ELIMINADO EL BLOQUEO SILENCIOSO: Si es primera ejecución pero encontramos resultados nuevos, los procesamos o registramos sin ignorarlos a ciegas
         if primera_ejecucion:
-          # Registramos los existentes para que no hagan spam al arrancar, pero permitimos flujo normal si hay nuevos
           horarios_enviados_hoy.add(clave_slot)
         else:
           if clave_slot not in horarios_enviados_hoy:
