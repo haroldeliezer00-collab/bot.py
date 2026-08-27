@@ -807,7 +807,7 @@ def verificar_resultados():
                                 f" {resultado_final}"
                             )
 
-                            # --- VALIDACIÓN AUTOMÁTICA DE REGALOS ACERTADOS ---
+                            # --- VALIDACIÓN AUTOMÁTICA DE REGALOS ACERTADOS (CON LOTERÍA DINÁMICA) ---
                             num_match = re.search(r"^(\d{1,2})", resultado_final)
                             if num_match and regalos_hoy:
                                 num_limpio = num_match.group(1)
@@ -820,7 +820,7 @@ def verificar_resultados():
                                             "🎉🎉 ¡ACERTAMOS! 🎉🎉\n\n"
                                             "✅ 🎁 Regalo del Día\n\n"
                                             f"🎯 {resultado_final}\n"
-                                            "🎲 🎰 CENTENA ANIMAL\n"
+                                            f"🎲 🎰 {nombre_loteria}\n"  # <--- AQUÍ TOMA LA LOTERÍA REAL DINÁMICAMENTE
                                             f"🕒 {hora}\n\n"
                                             "🍀 ¡Felicidades a todos los que confiaron en Agencia Harold José!"
                                         )
