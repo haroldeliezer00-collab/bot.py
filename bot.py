@@ -250,7 +250,7 @@ TEXTO_CASHEA = (
 )
 
 HEADER_RESULTADOS = (
-    "CENTRO DE APUESTAS HAROLD JOSÉ\n"
+    "AGENCIA HAROLD JOSÉ\n"
     "SEGURIDAD Y CONFIANZA\n"
     "RESULTADOS OFICIALES\n"
     "📲JUEGA AQUI👇👇\n"
@@ -419,7 +419,7 @@ def limpiar_memoria_diaria():
 
 def enviar_saludo_madrugada():
     enviar_telegram(
-        "🎯 CENTRO DE APUESTAS HAROLD JOSÉ 🎯\n\n"
+        "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n"
         "🌅 ¡Despertando con la mejor energía y listos para ganar! 🌅\n\n"
         "Comenzamos este nuevo día activos y enfocados. ¡Que la suerte esté de"
         " nuestro lado! 🍀🔥",
@@ -494,7 +494,7 @@ def generar_piramide():
     d2 = f"{unique_candidates[3]}-{unique_candidates[4]}-{unique_candidates[5]}"
 
     return (
-        "🎯 CENTRO DE APUESTAS HAROLD JOSÉ 🎯\n"
+        "🎯 AGENCIA HAROLD JOSÉ 🎯\n"
         "📢 REPORTE TÁCTICO - LA PIRÁMIDE 📢\n\n"
         f"📅 Fecha: {fecha_str}\n"
         "Análisis matemático actualizado y listo para la jugada. ¡A asegurar"
@@ -558,7 +558,7 @@ def enviar_regalos_agencia():
 
 def enviar_saludo_matutino():
     enviar_telegram(
-        "🎯 CENTRO DE APUESTAS HAROLD JOSÉ 🎯\n\n"
+        "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n"
         "🌅 ¡Buenos días a todos! 🌅\n\n"
         "Ya arrancamos un nuevo día con la mejor energía. Por estaremos"
         " compartiendo todos los resultados de los animalitos a medida que vayan"
@@ -670,7 +670,7 @@ def tarea_minuto_diez():
             ultima_hora_polla = clave_hora
             guardar_estado_disco()
             enviar_telegram(
-                "🎯 CENTRO DE APUESTAS HAROLD JOSÉ 🎯\n\n"
+                "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n"
                 "📢 ¡Pollas actualizadas!\n"
                 "Puedes verlas aquí 👇🏻\n"
                 f"{ENLACE_POLLAS}\n\n"
@@ -682,7 +682,7 @@ def tarea_minuto_diez():
 def enviar_mensaje_cierre():
     global taquilla_activa_hoy, imagen_taquilla_file_id, ultima_hora_polla, regalos_hoy
     enviar_telegram(
-        "🎯 CENTRO DE APUESTAS HAROLD JOSÉ 🎯\n\n"
+        "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n"
         "🌙 ¡FINAL DE JORNADA! 🌙\n\n"
         "Estos fueron todos los resultados del día de hoy. ¡Gracias por jugar con"
         " nosotros! Los esperamos el día de mañana con mucha más suerte y"
