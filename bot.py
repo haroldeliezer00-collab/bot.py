@@ -820,7 +820,7 @@ def verificar_resultados():
                                             "🎉🎉 ¡ACERTAMOS! 🎉🎉\n\n"
                                             "✅ 🎁 Regalo del Día\n\n"
                                             f"🎯 {resultado_final}\n"
-                                            f"🎲 🎰 {nombre_loteria}\n"  # <--- AQUÍ TOMA LA LOTERÍA REAL DINÁMICAMENTE
+                                            f"🎲 🎰 {nombre_loteria}\n"
                                             f"🕒 {hora}\n\n"
                                             "🍀 ¡Felicidades a todos los que confiaron en Agencia Harold José!"
                                         )
@@ -841,10 +841,12 @@ def verificar_resultados():
         if nuevos_encontrados:
             for item_nuevo in nuevos_encontrados:
                 mensaje = (
-                    "🎯 CENTRO DE APUESTAS HAROLD JOSÉ 🎯\n\n"
+                    "🎯 AGENCIA HAROLD JOSÉ 🎯\n"
+                    "•••••••••••••••••••••••••••••••••••\n"
                     f"🎰 {item_nuevo['loteria']}\n"
                     f"🕒 {item_nuevo['hora']}  {item_nuevo['resultado']}\n"
-                    f"{ENLACE_CANAL}"
+                    "•••••••••••••••••••••••••••••••••••\n"
+                    "📲0412-4489363"
                 )
                 enviar_telegram(mensaje, disable_web_preview=True)
                 time.sleep(2)
