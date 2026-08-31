@@ -772,35 +772,78 @@ def verificar_resultados():
                     if par not in animales_encontrados:
                         animales_encontrados.append(par)
 
-            if len(animales_encontrados) >= 4:
-                a = animales_encontrados[0]
-                b = animales_encontrados[1]
-                c = animales_encontrados[2]
-                d = animales_encontrados[3]
+            # Determinar si es la lotería especial multi-resultado (Ruleta Activa ESP) o estándar
+            es_especial = "ESP" in nombre_loteria.upper() or "ESPECIAL" in nombre_loteria.upper()
 
-                clave_slot = (nombre_loteria.upper().strip(), hora.upper().strip())
+            if es_especial:
+                if len(animales_encontrados) >= 4:
+                    a = animales_encontrados[0]
+                    b = animales_encontrados[1]
+                    c = animales_encontrados[2]
+                    d = animales_encontrados[3]
 
-                if primera_ejecucion:
-                    horarios_enviados_hoy.add(clave_slot)
-                else:
-                    if clave_slot not in horarios_enviados_hoy:
-                        item_dict = {
-                            "loteria": nombre_loteria,
-                            "hora": hora,
-                            "a": a,
-                            "b": b,
-                            "c": c,
-                            "d": d,
-                        }
-                        if item_dict not in nuevos_encontrados:
-                            nuevos_encontrados.append(item_dict)
-                            horarios_enviados_hoy.add(clave_slot)
-                            guardar_estado_disco()
-                            print(f"✨ Nuevo resultado A-B-C-D detectado: {nombre_loteria} - {hora}")
+                    clave_slot = (nombre_loteria.upper().strip(), hora.upper().strip())
 
-                            if regalos_hoy:
-                                for item_animal in [a, b, c, d]:
-                                    num_limpio = item_animal[0]
+                    if primera_ejecucion:
+                        horarios_enviados_hoy.add(clave_slot)
+                    else:
+                        if clave_slot not in horarios_enviados_hoy:
+                            item_dict = {
+                                "tipo": "especial",
+                                "loteria": nombre_loteria,
+                                "hora": hora,
+                                "a": a,
+                                "b": b,
+                                "c": c,
+                                "d": d,
+                            }
+                            if item_dict not in nuevos_encontrados:
+                                nuevos_encontrados.append(item_dict)
+                                horarios_enviados_hoy.add(clave_slot)
+                                guardar_estado_disco()
+                                print(f"✨ Nuevo resultado especial A-B-C-D detectado: {nombre_loteria} - {hora}")
+
+                                if regalos_hoy:
+                                    for item_animal in [a, b, c, d]:
+                                        num_limpio = item_animal[0]
+                                        for r_num, r_animal in regalos_hoy:
+                                            if (
+                                                num_limpio.lstrip("0") == r_num.lstrip("0")
+                                                or num_limpio == r_num
+                                            ):
+                                                mensaje_acierto = (
+                                                    "🎉🎉 ¡ACERTAMOS! 🎉🎉\n\n"
+                                                    "✅ 🎁 Regalo del Día\n\n"
+                                                    f"🎯 {num_limpio} - {item_animal[1]}\n"
+                                                    f"🎲 🎰 {nombre_loteria}\n"
+                                                    f"🕒 {hora}\n\n"
+                                                    "🍀 ¡Felicidades a todos los que confiaron en Agencia Harold José!"
+                                                )
+                                                enviar_telegram_con_botones(mensaje_acierto)
+                                                break
+            else:
+                if len(animales_encontrados) >= 1:
+                    a = animales_encontrados[0]
+                    clave_slot = (nombre_loteria.upper().strip(), hora.upper().strip())
+
+                    if primera_ejecucion:
+                        horarios_enviados_hoy.add(clave_slot)
+                    else:
+                        if clave_slot not in horarios_enviados_hoy:
+                            item_dict = {
+                                "tipo": "normal",
+                                "loteria": nombre_loteria,
+                                "hora": hora,
+                                "a": a,
+                            }
+                            if item_dict not in nuevos_encontrados:
+                                nuevos_encontrados.append(item_dict)
+                                horarios_enviados_hoy.add(clave_slot)
+                                guardar_estado_disco()
+                                print(f"✨ Nuevo resultado estándar detectado: {nombre_loteria} - {hora} -> {a[0]} - {a[1]}")
+
+                                if regalos_hoy:
+                                    num_limpio = a[0]
                                     for r_num, r_animal in regalos_hoy:
                                         if (
                                             num_limpio.lstrip("0") == r_num.lstrip("0")
@@ -809,7 +852,7 @@ def verificar_resultados():
                                             mensaje_acierto = (
                                                 "🎉🎉 ¡ACERTAMOS! 🎉🎉\n\n"
                                                 "✅ 🎁 Regalo del Día\n\n"
-                                                f"🎯 {num_limpio} - {item_animal[1]}\n"
+                                                f"🎯 {num_limpio} - {a[1]}\n"
                                                 f"🎲 🎰 {nombre_loteria}\n"
                                                 f"🕒 {hora}\n\n"
                                                 "🍀 ¡Felicidades a todos los que confiaron en Agencia Harold José!"
@@ -825,16 +868,25 @@ def verificar_resultados():
 
         if nuevos_encontrados:
             for item_nuevo in nuevos_encontrados:
-                mensaje = (
-                    "🎯 CENTRO DE APUESTAS HAROLD JOSÉ 🎯\n"
-                    f"🎰 {item_nuevo['loteria']}\n"
-                    f"🕒 {item_nuevo['hora']}  \n"
-                    f"A-{item_nuevo['a'][0]} - {item_nuevo['a'][1]}\n"
-                    f"B-{item_nuevo['b'][0]} - {item_nuevo['b'][1]}\n"
-                    f"C-{item_nuevo['c'][0]} - {item_nuevo['c'][1]}\n"
-                    f"D-{item_nuevo['d'][0]} - {item_nuevo['d'][1]}\n"
-                    f"{ENLACE_CANAL}"
-                )
+                if item_nuevo.get("tipo") == "especial":
+                    mensaje = (
+                        "🎯 CENTRO DE APUESTAS HAROLD JOSÉ 🎯\n"
+                        f"🎰 {item_nuevo['loteria']}\n"
+                        f"🕒 {item_nuevo['hora']}  \n"
+                        f"A-{item_nuevo['a'][0]} - {item_nuevo['a'][1]}\n"
+                        f"B-{item_nuevo['b'][0]} - {item_nuevo['b'][1]}\n"
+                        f"C-{item_nuevo['c'][0]} - {item_nuevo['c'][1]}\n"
+                        f"D-{item_nuevo['d'][0]} - {item_nuevo['d'][1]}\n"
+                        f"{ENLACE_CANAL}"
+                    )
+                else:
+                    mensaje = (
+                        "🎯 CENTRO DE APUESTAS HAROLD JOSÉ 🎯\n"
+                        f"🎰 {item_nuevo['loteria']}\n"
+                        f"🕒 {item_nuevo['hora']}\n"
+                        f"🎯 {item_nuevo['a'][0]} - {item_nuevo['a'][1]}\n"
+                        f"{ENLACE_CANAL}"
+                    )
                 enviar_telegram_con_botones(mensaje)
                 time.sleep(2)
 
