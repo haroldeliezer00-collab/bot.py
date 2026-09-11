@@ -1,6 +1,5 @@
 from datetime import datetime
 import json
-import logging
 import os
 import random
 import re
@@ -15,25 +14,18 @@ import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 import urllib3
 
-# Configuración de logging profesional para Render
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler()],
-)
-
 # Forzar la zona horaria de Venezuela de forma segura
 os.environ["TZ"] = "America/Caracas"
 try:
     time.tzset()
 except Exception as e:
-    logging.warning(f"⚠️ Nota sobre tzset: {e}")
+    print(f"⚠️ Nota sobre tzset: {e}")
 
 # Desactivar advertencias de certificados SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Credenciales y canal principal configurado
-TOKEN = os.environ.get("TELEGRAM_TOKEN", "8728747633:AAHakMFznhlpK6QbkZinctgbl131wE2hIeI")
+TOKEN = "8728747633:AAHakMFznhlpK6QbkZinctgbl131wE2hIeI"
 CANAL = "@resultadosagharoldjose"  # Canal oficial de producción indicado
 ENLACE_CANAL = "https://t.me/resultadosagharoldjose"
 ENLACE_POLLAS = "https://t.me/pollasydupletas"
@@ -45,10 +37,6 @@ URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
 STATE_FILE = "bot_state.json"
 
-# Sesión HTTP optimizada para reuso de conexiones
-http_session = requests.Session()
-http_session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"})
-
 # Control estricto anti-duplicados y memoria
 horarios_enviados_hoy = set()
 primera_ejecucion = True
@@ -56,8 +44,9 @@ ultima_hora_polla = None
 
 taquilla_activa_hoy = False
 imagen_taquilla_file_id = None
-imagen_cashea_file_id = None
-regalos_hoy = []  # Almacena los regalos del día para validación de aciertos automáticos
+regalos_hoy = (
+    []
+)  # Almacena los regalos del día para validación de aciertos automáticos
 
 ANIMALITOS_DICT = {
     "0": "Delfín",
@@ -102,10 +91,10 @@ ANIMALITOS_DICT = {
 
 
 def cargar_estado_disco():
-    global horarios_enviados_hoy, primera_ejecucion, ultima_hora_polla, taquilla_activa_hoy, imagen_cashea_file_id, regalos_hoy
+    global horarios_enviados_hoy, primera_ejecucion, ultima_hora_polla, taquilla_activa_hoy, regalos_hoy
     if os.path.exists(STATE_FILE):
         try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
+            with open(STATE_FILE, "r") as f:
                 data = json.load(f)
                 hoy_str = datetime.now().strftime("%Y-%m-%d")
                 if data.get("fecha") == hoy_str:
@@ -118,17 +107,18 @@ def cargar_estado_disco():
                             h_data[1],
                         )
                     taquilla_activa_hoy = data.get("taquilla_activa", False)
-                    imagen_cashea_file_id = data.get("imagen_cashea", None)
                     regalos_hoy = data.get("regalos_hoy", [])
-                    logging.info(f"📂 Estado cargado desde disco. Slots bloqueados: {len(horarios_enviados_hoy)}")
+                    print(
+                        f"📂 Estado cargado desde disco. Slots bloqueados:"
+                        f" {len(horarios_enviados_hoy)}"
+                    )
                     return
         except Exception as e:
-            logging.warning(f"⚠️ Error cargando estado: {e}")
+            print(f"⚠️ Error cargando estado: {e}")
     horarios_enviados_hoy = set()
     primera_ejecucion = True
     ultima_hora_polla = None
     taquilla_activa_hoy = False
-    imagen_cashea_file_id = None
     regalos_hoy = []
 
 
@@ -143,17 +133,16 @@ def guardar_estado_disco():
             ]
         data = {
             "fecha": hoy_str,
-            "enviados": [list(x) for x in horarios_enviados_hoy],
+            "enviados": list(list(x) for x in horarios_enviados_hoy),
             "primera_ejecucion": primera_ejecucion,
             "ultima_polla_hora": polla_serializable,
             "taquilla_activa": taquilla_activa_hoy,
-            "imagen_cashea": imagen_cashea_file_id,
             "regalos_hoy": regalos_hoy,
         }
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        with open(STATE_FILE, "w") as f:
+            json.dump(data, f)
     except Exception as e:
-        logging.warning(f"⚠️ Error guardando estado: {e}")
+        print(f"⚠️ Error guardando estado: {e}")
 
 
 # Cargar estado inicial al arrancar
@@ -161,12 +150,14 @@ cargar_estado_disco()
 
 caption_taquilla = (
     "✅ AGENCIA HAROLD JOSÉ ACTIVA ✅\n"
-    "Ya estamos operativos brindando la mejor atención. Calidad, respaldo y rapidez en cada una de todas tus solicitudes.\n\n"
+    "Ya estamos operativos brindando la mejor atención. Calidad, respaldo y"
+    " rapidez en cada una de todas tus solicitudes.\n\n"
     "📲 Envía tus jugadas:\n"
     "(Comprobante de pago / Lotería / monto / Hora)\n\n"
     "📖 Consulta nuestro reglamento aquí:\n"
     "https://wa.me/p/33319103291071105/584124489363\n"
-    "🚀 Agiliza tu proceso aquí: https://wa.me/p/24724650613899486/584124489363\n\n"
+    "🚀 Agiliza tu proceso aquí:"
+    " https://wa.me/p/24724650613899486/584124489363\n\n"
     "RESULTADOS AUTOMÁTICOS\n"
     f"{ENLACE_CANAL}\n\n"
     "¡Mucho éxito en la jornada de hoy! 🍀✨"
@@ -252,8 +243,10 @@ TEXTO_PUBLICITARIO = (
 
 TEXTO_CASHEA = (
     "✨ ¡Tu jugada favorita ahora con facilidades de pago! 💜🔥\n\n"
-    "En la AGENCIA HAROLD JOSÉ te ayudamos a ganar: juega hoy, paga después con Cashea y llévate ese premio que tanto esperas. 💸\n\n"
-    "📲 Activa tu jugada escribiendo al WhatsApp: 04124489363. ¡Atención rápida y segura! ⚡"
+    "En la AGENCIA HAROLD JOSÉ te ayudamos a ganar: juega hoy, paga después con"
+    " Cashea y llévate ese premio que tanto esperas. 💸\n\n"
+    "📲 Activa tu jugada escribiendo al WhatsApp: 04124489363. ¡Atención"
+    " rápida y segura! ⚡"
 )
 
 HEADER_RESULTADOS = (
@@ -275,18 +268,17 @@ def home():
         if taquilla_activa_hoy
         else "DESACTIVADA 🔴 (No laborando)"
     )
-    cashea_tag = "CONFIGURADA 🟢 (Imagen cargada)" if imagen_cashea_file_id else "SOLO TEXTO 🟡 (Sin imagen aún)"
     return (
-        f"¡El bot de resultados de la AGENCIA HAROLD JOSÉ está activo en el canal oficial {CANAL}!<br><br>"
-        f"<b>Estado del aviso de taquilla de hoy:</b> {estado_tag}<br>"
-        f"<b>Estado de la imagen de Cashea:</b> {cashea_tag}<br><br>"
+        f"¡El bot de resultados de la AGENCIA HAROLD JOSÉ está activo en el canal"
+        f" oficial {CANAL}!<br><br>"
+        f"<b>Estado del aviso de taquilla de hoy:</b> {estado_tag}<br><br>"
         "<b>Enlaces de prueba rápida (Test de cada opción):</b><br>"
         "👉 <a href='/test/madrugada'>Probar Saludo de Madrugada (6:30 AM)</a><br>"
         "👉 <a href='/test/piramide'>Probar Pirámide Numérica con Sumas por Fila (6:31 AM)</a><br>"
         "👉 <a href='/test/regalos'>Probar Regalos de la Agencia (6:45 AM)</a><br>"
         "👉 <a href='/test/saludo'>Probar Saludo Matutino (7:00 AM)</a><br>"
         "👉 <a href='/test/publicidad'>Probar Aviso Publicitario (7am/3pm/6pm)</a><br>"
-        "👉 <a href='/test/cashea'>Probar Aviso con Botones Cashea (Cada hora de 9am a 5pm)</a><br>"
+        "👉 <a href='/test/cashea'>Probar Aviso con Botones Cashea (9am/10:30am/12:30pm)</a><br>"
         "👉 <a href='/test/tiempocumplido'>Probar Tiempo Cumplido (Minuto 55)</a><br>"
         "👉 <a href='/test/bcv'>Probar Tasa Oficial BCV</a><br>"
         "👉 <a href='/test/taquilla_manual'>Probar Envío Manual de Taquilla Activa</a><br>"
@@ -387,28 +379,11 @@ def enviar_telegram(mensaje, disable_web_preview=True):
         "disable_web_page_preview": disable_web_preview,
     }
     try:
-        response = http_session.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=10)
         if response.status_code != 200:
-            logging.warning(f"⚠️ Error al enviar al canal: {response.text}")
+            print(f"⚠️ Error al enviar al canal: {response.text}")
     except Exception as e:
-        logging.warning(f"⚠️ Excepción de conexión con Telegram: {e}")
-
-
-def enviar_telegram_con_botones(mensaje, reply_markup_dict):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CANAL,
-        "text": mensaje,
-        "parse_mode": "Markdown",
-        "reply_markup": reply_markup_dict,
-        "disable_web_page_preview": True,
-    }
-    try:
-        response = http_session.post(url, json=payload, timeout=10)
-        if response.status_code != 200:
-            logging.warning(f"⚠️ Error al enviar mensaje con botones: {response.text}")
-    except Exception as e:
-        logging.warning(f"⚠️ Excepción al enviar mensaje con botones: {e}")
+        print(f"⚠️ Excepción de conexión con Telegram: {e}")
 
 
 def enviar_telegram_foto(photo_id, caption):
@@ -420,50 +395,34 @@ def enviar_telegram_foto(photo_id, caption):
         "parse_mode": "Markdown",
     }
     try:
-        response = http_session.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=10)
         if response.status_code != 200:
-            logging.warning(f"⚠️ Error al enviar foto al canal: {response.text}")
+            print(f"⚠️ Error al enviar foto al canal: {response.text}")
+            enviar_telegram(caption, disable_web_preview=True)
     except Exception as e:
-        logging.warning(f"⚠️ Excepción de conexión con Telegram al enviar foto: {e}")
-
-
-def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
-    payload = {
-        "chat_id": CANAL,
-        "photo": photo_id,
-        "caption": caption,
-        "parse_mode": "Markdown",
-    }
-    if reply_markup_dict:
-        payload["reply_markup"] = reply_markup_dict
-    try:
-        response = http_session.post(url, json=payload, timeout=10)
-        if response.status_code != 200:
-            logging.warning(f"⚠️ Error al enviar foto con botones al canal: {response.text}")
-    except Exception as e:
-        logging.warning(f"⚠️ Excepción al enviar foto con botones: {e}")
+        print(f"⚠️ Excepción de conexión con Telegram al enviar foto: {e}")
+        enviar_telegram(caption, disable_web_preview=True)
 
 
 def limpiar_memoria_diaria():
-    global horarios_enviados_hoy, primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id, ultima_hora_polla, regalos_hoy
+    global horarios_enviados_hoy, primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id, ultima_hora_polla, regalos_hoy
     horarios_enviados_hoy.clear()
     primera_ejecucion = True
     taquilla_activa_hoy = False
     imagen_taquilla_file_id = None
-    imagen_cashea_file_id = None
     ultima_hora_polla = None
     regalos_hoy = []
     if os.path.exists(STATE_FILE):
         os.remove(STATE_FILE)
-    logging.info("🧹 Memoria y archivo de disco limpiados para el nuevo día.")
+    print("🧹 Memoria y archivo de disco limpiados para el nuevo día.")
 
 
 def enviar_saludo_madrugada():
     enviar_telegram(
         "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n"
         "🌅 ¡Despertando con la mejor energía y listos para ganar! 🌅\n\n"
-        "Comenzamos este nuevo día activos y enfocados. ¡Que la suerte esté de nuestro lado! 🍀🔥",
+        "Comenzamos este nuevo día activos y enfocados. ¡Que la suerte esté de"
+        " nuestro lado! 🍀🔥",
         disable_web_preview=True,
     )
 
@@ -485,8 +444,11 @@ def generar_piramide():
     for i, f in enumerate(filas):
         nums_str = "  ".join(str(d) for d in f)
         dots_count = 3 + (i * 2)
-        lineas_formateadas.append(f"{'.' * dots_count}  {nums_str}  {'.' * dots_count}")
+        lineas_formateadas.append(
+            f"{'.' * dots_count}  {nums_str}  {'.' * dots_count}"
+        )
 
+        # Cálculo de la suma de la fila actual
         suma_fila = sum(f)
         nombre_fila = sufijos_filas[i] if i < len(sufijos_filas) else f"{i+1}TA"
         sumas_filas_texto.append(f"• {nombre_fila} FILA: {suma_fila}")
@@ -494,7 +456,12 @@ def generar_piramide():
     cuerpo_piramide = "\n".join(lineas_formateadas)
     bloque_sumas = "\n".join(sumas_filas_texto)
 
-    seed_val = int(ahora.strftime("%Y%m%d")) + ahora.hour * 100 + ahora.minute + random.randint(100, 999)
+    seed_val = (
+        int(ahora.strftime("%Y%m%d"))
+        + ahora.hour * 100
+        + ahora.minute
+        + random.randint(100, 999)
+    )
     rnd = random.Random(seed_val)
 
     candidates = []
@@ -517,7 +484,9 @@ def generar_piramide():
 
     while len(unique_candidates) < 6:
         r_val = rnd.randint(0, 36)
-        c_rand = f"{r_val:02d}" if r_val != 0 else ("0" if rnd.random() > 0.5 else "00")
+        c_rand = (
+            f"{r_val:02d}" if r_val != 0 else ("0" if rnd.random() > 0.5 else "00")
+        )
         if c_rand not in unique_candidates:
             unique_candidates.append(c_rand)
 
@@ -528,14 +497,16 @@ def generar_piramide():
         "🎯 AGENCIA HAROLD JOSÉ 🎯\n"
         "📢 REPORTE TÁCTICO - LA PIRÁMIDE 📢\n\n"
         f"📅 Fecha: {fecha_str}\n"
-        "Análisis matemático actualizado y listo para la jugada. ¡A asegurar posición:\n\n"
+        "Análisis matemático actualizado y listo para la jugada. ¡A asegurar"
+        " posición:\n\n"
         f"{cuerpo_piramide}\n\n"
         "📊 SUMA POR FILA:\n"
         f"{bloque_sumas}\n\n"
         "🔥 DATOS CLAVES PARA HOY:\n"
         f"📌 {d1}\n"
         f"📌 {d2}\n\n"
-        "⚡ ¡La precisión y los números hablan por sí solos! ¡Juega con confianza y gana con nosotros! 🍀 💰"
+        "⚡ ¡La precisión y los números hablan por sí solos! ¡Juega con confianza y"
+        " gana con nosotros! 🍀 💰"
     )
 
 
@@ -589,11 +560,14 @@ def enviar_saludo_matutino():
     enviar_telegram(
         "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n"
         "🌅 ¡Buenos días a todos! 🌅\n\n"
-        "Ya arrancamos un nuevo día con la mejor energía. Estaremos compartiendo todos los resultados de los animalitos a medida que vayan saliendo.\n\n"
+        "Ya arrancamos un nuevo día con la mejor energía. Por estaremos"
+        " compartiendo todos los resultados de los animalitos a medida que vayan"
+        " saliendo.\n\n"
         "📢 Nuestros canales oficiales:\n"
         "🎟️ Catálogo y WhatsApp: https://wa.me/c/584124489363\n"
         "📸 Instagram: https://www.instagram.com/agharold.jose (@agharold.jose)\n"
-        "💬 Canal de WhatsApp: https://whatsapp.com/channel/0029Vaza7YIGzzKJq7as7s1T\n\n"
+        "💬 Canal de WhatsApp:"
+        " https://whatsapp.com/channel/0029Vaza7YIGzzKJq7as7s1T\n\n"
         "¡Mucha suerte en sus jugadas el día de hoy y a ganar! 🍀🔥",
         disable_web_preview=True,
     )
@@ -604,7 +578,6 @@ def enviar_anuncio_publicitario():
 
 
 def enviar_anuncio_cashea():
-    global imagen_cashea_file_id
     markup = InlineKeyboardMarkup()
     url_jugar = "https://wa.me/584124489363?text=Hola%2C%20quiero%20jugar%20con%20Cashea%20en%20Agencia%20Harold%20Jos%C3%A9."
     url_consultar = "https://wa.me/584124489363?text=Hola%2C%20quiero%20consultar%20mis%20cuotas%20de%20Cashea%20en%20Agencia%20Harold%20Jos%C3%A9."
@@ -613,12 +586,21 @@ def enviar_anuncio_cashea():
         InlineKeyboardButton("🎯 JUGAR CON CASHEA", url=url_jugar),
         InlineKeyboardButton("💳 CONSULTAR CASHEA", url=url_consultar),
     )
-    markup_dict = markup.to_dict()
 
-    if imagen_cashea_file_id:
-        enviar_telegram_foto_con_botones(imagen_cashea_file_id, TEXTO_CASHEA, markup_dict)
-    else:
-        enviar_telegram_con_botones(TEXTO_CASHEA, markup_dict)
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CANAL,
+        "text": TEXTO_CASHEA,
+        "parse_mode": "Markdown",
+        "reply_markup": markup.to_dict(),
+        "disable_web_page_preview": True,
+    }
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code != 200:
+            print(f"⚠️ Error al enviar anuncio de Cashea: {response.text}")
+    except Exception as e:
+        print(f"⚠️ Excepción al enviar anuncio de Cashea: {e}")
 
 
 def enviar_aviso_tiempo_cumplido():
@@ -630,7 +612,8 @@ def enviar_aviso_tiempo_cumplido():
 
 def enviar_tasa_dolar():
     try:
-        response = http_session.get(URL_BCV, timeout=15, verify=False)
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(URL_BCV, headers=headers, timeout=15, verify=False)
         precio_dolar = "756,71"
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
@@ -655,7 +638,7 @@ def enviar_tasa_dolar():
             disable_web_preview=True,
         )
     except Exception as e:
-        logging.error(f"Error BCV: {e}")
+        print(f"Error BCV: {e}")
 
 
 def tarea_envio_programado_taquilla():
@@ -663,12 +646,15 @@ def tarea_envio_programado_taquilla():
     if taquilla_activa_hoy:
         if imagen_taquilla_file_id:
             enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
-            logging.info("✅ Taquilla activa reenviada automáticamente a las 3:00 PM.")
+            print("✅ Taquilla activa reenviada automáticamente a las 3:00 PM.")
         else:
             enviar_telegram(caption_taquilla, disable_web_preview=True)
-            logging.info("✅ Taquilla activa reenviada por texto a las 3:00 PM.")
+            print("✅ Taquilla activa reenviada por texto a las 3:00 PM.")
     else:
-        logging.info("ℹ️ A las 3:00 PM la taquilla no fue activada en la mañana, se omite el envío.")
+        print(
+            "ℹ️ A las 3:00 PM la taquilla no fue activada en la mañana, se omite el"
+            " envío."
+        )
 
 
 def tarea_minuto_diez():
@@ -686,7 +672,7 @@ def tarea_minuto_diez():
             enviar_telegram(
                 "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n"
                 "📢 ¡Pollas actualizadas!\n"
-                "Puedes verlas hier 👇🏻\n"
+                "Puedes verlas aquí 👇🏻\n"
                 f"{ENLACE_POLLAS}\n\n"
                 "¡Mucho éxito! 🍀",
                 disable_web_preview=False,
@@ -694,16 +680,17 @@ def tarea_minuto_diez():
 
 
 def enviar_mensaje_cierre():
-    global taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id, ultima_hora_polla, regalos_hoy
+    global taquilla_activa_hoy, imagen_taquilla_file_id, ultima_hora_polla, regalos_hoy
     enviar_telegram(
         "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n"
         "🌙 ¡FINAL DE JORNADA! 🌙\n\n"
-        "Estos fueron todos los resultados del día de hoy. ¡Gracias por jugar con nosotros! Los esperamos el día de mañana con mucha más suerte y energía. 🍀✨",
+        "Estos fueron todos los resultados del día de hoy. ¡Gracias por jugar con"
+        " nosotros! Los esperamos el día de mañana con mucha más suerte y"
+        " energía. 🍀✨",
         disable_web_preview=True,
     )
     taquilla_activa_hoy = False
     imagen_taquilla_file_id = None
-    imagen_cashea_file_id = None
     ultima_hora_polla = None
     regalos_hoy = []
     guardar_estado_disco()
@@ -712,9 +699,14 @@ def enviar_mensaje_cierre():
 def verificar_resultados():
     global horarios_enviados_hoy, primera_ejecucion, regalos_hoy
     try:
-        respuesta = http_session.get(URL_LOTERIA, timeout=15)
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
+            )
+        }
+        respuesta = requests.get(URL_LOTERIA, headers=headers, timeout=15)
         if respuesta.status_code != 200:
-            logging.warning(f"⚠️ Error al conectar con la web de lotería: {respuesta.status_code}")
+            print(f"⚠️ Error al conectar con la web de lotería: {respuesta.status_code}")
             return
 
         soup = BeautifulSoup(respuesta.text, "html.parser")
@@ -726,7 +718,6 @@ def verificar_resultados():
             tarjetas = soup.find_all(["div", "section"])
 
         nuevos_encontrados = []
-        procesados_en_esta_corrida = set()
 
         for tarjeta in tarjetas:
             nombre_loteria = ""
@@ -735,7 +726,7 @@ def verificar_resultados():
                 class_=re.compile(r"title|header|name|lotto|text", re.IGNORECASE),
             )
             for pt in posibles_titulos:
-                t_text = limpiar_texto(pt.get_text(" ", strip=True)).upper()
+                t_text = pt.get_text(" ", strip=True).upper()
                 if (
                     t_text
                     and len(t_text) > 2
@@ -748,7 +739,7 @@ def verificar_resultados():
 
             if not nombre_loteria:
                 lineas = [
-                    limpiar_texto(l).upper()
+                    l.strip().upper()
                     for l in tarjeta.get_text("\n", strip=True).split("\n")
                     if l.strip()
                 ]
@@ -765,7 +756,8 @@ def verificar_resultados():
             if not nombre_loteria or len(nombre_loteria) > 40:
                 continue
 
-            nombre_loteria = limpiar_texto(re.sub(r"^[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+", "", nombre_loteria)).upper()
+            nombre_loteria = re.sub(r"^[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+", "", nombre_loteria)
+            nombre_loteria = limpiar_texto(nombre_loteria)
             if not nombre_loteria:
                 continue
 
@@ -777,14 +769,14 @@ def verificar_resultados():
                 slots_sorteo = [tarjeta]
 
             for slot in slots_sorteo:
-                texto_slot = limpiar_texto(slot.get_text(" ", strip=True)).upper()
+                texto_slot = slot.get_text(" ", strip=True).upper()
                 if "PENDIENTE" in texto_slot:
                     continue
 
                 match_h = re.search(r"(\d{1,2}:\d{2}\s*(?:AM|PM))", texto_slot)
                 if not match_h:
                     continue
-                hora = limpiar_texto(match_h.group(1)).upper()
+                hora = match_h.group(1).upper()
 
                 match_res = re.search(
                     r"(\d{1,2}\s-\s[A-ZÁÉÍÓÚÑa-zñáéíóú]+(?:\s+[A-ZÁÉÍÓÚÑa-zñáéíóú]+)?)",
@@ -795,12 +787,7 @@ def verificar_resultados():
 
                 resultado_final = limpiar_texto(match_res.group(1)).upper()
 
-                clave_slot = (nombre_loteria, hora)
-
-                # Evitar procesar duplicados si la misma tarjeta aparece anidada en el HTML
-                if clave_slot in procesados_en_esta_corrida:
-                    continue
-                procesados_en_esta_corrida.add(clave_slot)
+                clave_slot = (nombre_loteria.upper().strip(), hora.upper().strip())
 
                 if primera_ejecucion:
                     horarios_enviados_hoy.add(clave_slot)
@@ -815,10 +802,12 @@ def verificar_resultados():
                             nuevos_encontrados.append(item_dict)
                             horarios_enviados_hoy.add(clave_slot)
                             guardar_estado_disco()
-                            logging.info(
-                                f"✨ Nuevo resultado detectado: {nombre_loteria} - {hora} - {resultado_final}"
+                            print(
+                                f"✨ Nuevo resultado detectado: {nombre_loteria} - {hora} -"
+                                f" {resultado_final}"
                             )
 
+                            # --- VALIDACIÓN AUTOMÁTICA DE REGALOS ACERTADOS (CON LOTERÍA DINÁMICA) ---
                             num_match = re.search(r"^(\d{1,2})", resultado_final)
                             if num_match and regalos_hoy:
                                 num_limpio = num_match.group(1)
@@ -835,13 +824,18 @@ def verificar_resultados():
                                             f"🕒 {hora}\n\n"
                                             "🍀 ¡Felicidades a todos los que confiaron en Agencia Harold José!"
                                         )
-                                        enviar_telegram(mensaje_acierto, disable_web_preview=True)
+                                        enviar_telegram(
+                                            mensaje_acierto, disable_web_preview=True
+                                        )
                                         break
 
         if primera_ejecucion:
             primera_ejecucion = False
             guardar_estado_disco()
-            logging.info(f"✅ Sincronización inicial completada. Slots bloqueados en memoria: {len(horarios_enviados_hoy)}")
+            print(
+                f"✅ Sincronización inicial completada. Slots bloqueados en memoria:"
+                f" {len(horarios_enviados_hoy)}"
+            )
             return
 
         if nuevos_encontrados:
@@ -858,70 +852,70 @@ def verificar_resultados():
                 time.sleep(2)
 
     except Exception as e:
-        logging.error(f"⚠️ Error detallado en verificación de resultados: {e}")
+        print(f"⚠️ Error detallado en verificación de resultados: {e}")
         traceback.print_exc()
 
 
-def procesar_mensajes_privados(message):
-    global taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id
+# --- MANEJADOR DE TAQUILLA ACTIVA DESDE EL CANAL PRIVADO ---
+def procesar_activacion_taquilla(message):
+    global taquilla_activa_hoy, imagen_taquilla_file_id
     caption = message.caption or message.text or ""
-    caption_lower = caption.lower()
-
-    if "taquilla activa" in caption_lower:
+    if "taquilla activa" in caption.lower():
         if message.photo:
             taquilla_activa_hoy = True
             imagen_taquilla_file_id = message.photo[-1].file_id
             guardar_estado_disco()
             enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
-            logging.info("✅ Taquilla activada y publicada con la imagen adjunta.")
+            print("✅ Taquilla activada y publicada con la imagen adjunta.")
         else:
             taquilla_activa_hoy = True
             guardar_estado_disco()
             enviar_telegram(caption_taquilla, disable_web_preview=True)
-            logging.info("✅ Taquilla activada por texto.")
-
-    elif "cashea" in caption_lower:
-        if message.photo:
-            imagen_cashea_file_id = message.photo[-1].file_id
-            guardar_estado_disco()
-            
-            markup = InlineKeyboardMarkup()
-            url_jugar = "https://wa.me/584124489363?text=Hola%2C%20quiero%20jugar%20con%20Cashea%20en%20Agencia%20Harold%20Jos%C3%A9."
-            url_consultar = "https://wa.me/584124489363?text=Hola%2C%20quiero%20consultar%20mis%20cuotas%20de%20Cashea%20en%20Agencia%20Harold%20Jos%C3%A9."
-            markup.add(
-                InlineKeyboardButton("🎯 JUGAR CON CASHEA", url=url_jugar),
-                InlineKeyboardButton("💳 CONSULTAR CASHEA", url=url_consultar),
-            )
-            enviar_telegram_foto_con_botones(imagen_cashea_file_id, TEXTO_CASHEA, markup.to_dict())
-            logging.info("✅ Imagen de Cashea registrada y publicada con éxito.")
-        else:
-            logging.info("ℹ️ Se recibió la palabra clave 'cashea' pero sin imagen adjunta.")
+            print("✅ Taquilla activada por texto.")
 
 
 @bot.message_handler(content_types=["photo"])
 def handle_photos(message):
-    procesar_mensajes_privados(message)
+    procesar_activacion_taquilla(message)
 
 
 @bot.channel_post_handler(content_types=["photo"])
-def handle_channel_posts_photos(message):
-    procesar_mensajes_privados(message)
+def handle_channel_photos(message):
+    procesar_activacion_taquilla(message)
 
 
-@bot.message_handler(func=lambda msg: True, content_types=["text"])
+@bot.message_handler(
+    func=lambda msg: True, content_types=["text"]
+)
 def handle_text_messages(message):
-    procesar_mensajes_privados(message)
+    if "taquilla activa" in (message.text or "").lower():
+        global taquilla_activa_hoy
+        taquilla_activa_hoy = True
+        guardar_estado_disco()
+        if imagen_taquilla_file_id:
+            enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
+        else:
+            enviar_telegram(caption_taquilla, disable_web_preview=True)
+        print("✅ Taquilla activada por texto.")
 
 
+# --- MANEJADOR DE RESULTADOS PROGRAMADOS / ANIMALITOS ---
 def procesar_limpieza_y_envio_animalitos(text):
     texto_lower = text.lower()
-    if "resultado programado" in texto_lower or "resultados animalitos" in texto_lower:
-        clave_corte = "resultados animalitos" if "resultados animalitos" in texto_lower else "resultado programado"
+    if (
+        "resultado programado" in texto_lower
+        or "resultados animalitos" in texto_lower
+    ):
+        clave_corte = (
+            "resultados animalitos"
+            if "resultados animalitos" in texto_lower
+            else "resultado programado"
+        )
         pos = texto_lower.find(clave_corte)
         texto_limpio = text[pos:].strip()
         mensaje_completo = f"{HEADER_RESULTADOS}\n\n{texto_limpio}"
         enviar_telegram(mensaje_completo, disable_web_preview=True)
-        logging.info("✅ Mensaje programado / animalitos enviado con éxito.")
+        print("✅ Mensaje programado / animalitos enviado con éxito.")
         return True
     return False
 
@@ -929,6 +923,14 @@ def procesar_limpieza_y_envio_animalitos(text):
 @bot.channel_post_handler(func=lambda message: True)
 def handle_channel_posts(message):
     text = message.text or message.caption or ""
+    procesar_limpieza_y_envio_animalitos(text)
+
+
+@bot.message_handler(
+    func=lambda message: True, content_types=["text"]
+)
+def handle_direct_messages_animalitos(message):
+    text = message.text or ""
     procesar_limpieza_y_envio_animalitos(text)
 
 
@@ -945,11 +947,16 @@ def iniciar_scheduler():
     scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=15, minute=0)
     scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=18, minute=0)
 
-    # Avisos de Cashea programados cada hora de 9 AM a 5 PM (9:00, 10:00, 11:00, 12:00, 13:00, 14:00, 15:00, 16:00, 17:00)
-    scheduler.add_job(enviar_anuncio_cashea, "cron", hour="9-17", minute=0)
+    # Avisos de Cashea programados a las 9:00 AM, 10:30 AM y 12:30 PM
+    scheduler.add_job(enviar_anuncio_cashea, "cron", hour=9, minute=0)
+    scheduler.add_job(enviar_anuncio_cashea, "cron", hour=10, minute=30)
+    scheduler.add_job(enviar_anuncio_cashea, "cron", hour=12, minute=30)
 
+    # Aviso de tiempo cumplido al minuto 55 (de 7:00 AM a 7:00 PM)
     scheduler.add_job(enviar_aviso_tiempo_cumplido, "cron", hour="7-19", minute=55)
+
     scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
+
     scheduler.add_job(tarea_minuto_diez, "cron", hour="7-17", minute=10)
     scheduler.add_job(enviar_mensaje_cierre, "cron", hour=21, minute=10)
     scheduler.add_job(verificar_resultados, "interval", seconds=30)
@@ -965,16 +972,21 @@ def iniciar_polling_bot():
                 skip_pending=True,
                 interval=3,
                 timeout=20,
-                allowed_updates=["message", "edited_message", "channel_post", "edited_channel_post"],
+                allowed_updates=[
+                    "message",
+                    "edited_message",
+                    "channel_post",
+                    "edited_channel_post",
+                ],
             )
         except Exception as e:
-            logging.error(f"⚠️ Error en polling: {e}")
+            print(f"⚠️ Error en polling: {e}")
             time.sleep(5)
 
 
 if __name__ == "__main__":
     try:
-        logging.info("🚀 Iniciando aplicación principal...")
+        print("🚀 Iniciando aplicación principal...")
         t_schedule = Thread(target=iniciar_scheduler)
         t_schedule.daemon = True
         t_schedule.start()
@@ -982,10 +994,10 @@ if __name__ == "__main__":
         t_bot = Thread(target=iniciar_polling_bot)
         t_bot.daemon = True
         t_bot.start()
-        logging.info("✅ Hilos iniciados correctamente.")
+        print("✅ Hilos iniciados correctamente.")
 
         port = int(os.environ.get("PORT", 5000))
         app.run(host="0.0.0.0", port=port, use_reloader=False)
     except Exception as e:
-        logging.critical(f"❌ Error crítico en ejecución principal: {e}")
+        print(f"❌ Error crítico en ejecución principal: {e}")
         traceback.print_exc()
