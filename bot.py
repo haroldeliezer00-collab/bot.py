@@ -423,10 +423,8 @@ def enviar_telegram_foto(photo_id, caption):
         response = http_session.post(url, json=payload, timeout=10)
         if response.status_code != 200:
             logging.warning(f"⚠️ Error al enviar foto al canal: {response.text}")
-            enviar_telegram(caption, disable_web_preview=True)
     except Exception as e:
         logging.warning(f"⚠️ Excepción de conexión con Telegram al enviar foto: {e}")
-        enviar_telegram(caption, disable_web_preview=True)
 
 
 def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
@@ -443,10 +441,8 @@ def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
         response = http_session.post(url, json=payload, timeout=10)
         if response.status_code != 200:
             logging.warning(f"⚠️ Error al enviar foto con botones al canal: {response.text}")
-            enviar_telegram_con_botones(caption, reply_markup_dict)
     except Exception as e:
         logging.warning(f"⚠️ Excepción al enviar foto con botones: {e}")
-        enviar_telegram_con_botones(caption, reply_markup_dict)
 
 
 def limpiar_memoria_diaria():
@@ -690,7 +686,7 @@ def tarea_minuto_diez():
             enviar_telegram(
                 "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n"
                 "📢 ¡Pollas actualizadas!\n"
-                "Puedes verlas aquí 👇🏻\n"
+                "Puedes verlas hier 👇🏻\n"
                 f"{ENLACE_POLLAS}\n\n"
                 "¡Mucho éxito! 🍀",
                 disable_web_preview=False,
@@ -730,6 +726,7 @@ def verificar_resultados():
             tarjetas = soup.find_all(["div", "section"])
 
         nuevos_encontrados = []
+        procesados_en_esta_corrida = set()
 
         for tarjeta in tarjetas:
             nombre_loteria = ""
@@ -738,7 +735,7 @@ def verificar_resultados():
                 class_=re.compile(r"title|header|name|lotto|text", re.IGNORECASE),
             )
             for pt in posibles_titulos:
-                t_text = pt.get_text(" ", strip=True).upper()
+                t_text = limpiar_texto(pt.get_text(" ", strip=True)).upper()
                 if (
                     t_text
                     and len(t_text) > 2
@@ -751,7 +748,7 @@ def verificar_resultados():
 
             if not nombre_loteria:
                 lineas = [
-                    l.strip().upper()
+                    limpiar_texto(l).upper()
                     for l in tarjeta.get_text("\n", strip=True).split("\n")
                     if l.strip()
                 ]
@@ -768,8 +765,7 @@ def verificar_resultados():
             if not nombre_loteria or len(nombre_loteria) > 40:
                 continue
 
-            nombre_loteria = re.sub(r"^[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+", "", nombre_loteria)
-            nombre_loteria = limpiar_texto(nombre_loteria)
+            nombre_loteria = limpiar_texto(re.sub(r"^[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+", "", nombre_loteria)).upper()
             if not nombre_loteria:
                 continue
 
@@ -781,14 +777,14 @@ def verificar_resultados():
                 slots_sorteo = [tarjeta]
 
             for slot in slots_sorteo:
-                texto_slot = slot.get_text(" ", strip=True).upper()
+                texto_slot = limpiar_texto(slot.get_text(" ", strip=True)).upper()
                 if "PENDIENTE" in texto_slot:
                     continue
 
                 match_h = re.search(r"(\d{1,2}:\d{2}\s*(?:AM|PM))", texto_slot)
                 if not match_h:
                     continue
-                hora = match_h.group(1).upper()
+                hora = limpiar_texto(match_h.group(1)).upper()
 
                 match_res = re.search(
                     r"(\d{1,2}\s-\s[A-ZÁÉÍÓÚÑa-zñáéíóú]+(?:\s+[A-ZÁÉÍÓÚÑa-zñáéíóú]+)?)",
@@ -799,7 +795,12 @@ def verificar_resultados():
 
                 resultado_final = limpiar_texto(match_res.group(1)).upper()
 
-                clave_slot = (nombre_loteria.upper().strip(), hora.upper().strip())
+                clave_slot = (nombre_loteria, hora)
+
+                # Evitar procesar duplicados si la misma tarjeta aparece anidada en el HTML
+                if clave_slot in procesados_en_esta_corrida:
+                    continue
+                procesados_en_esta_corrida.add(clave_slot)
 
                 if primera_ejecucion:
                     horarios_enviados_hoy.add(clave_slot)
@@ -903,7 +904,7 @@ def handle_photos(message):
 
 
 @bot.channel_post_handler(content_types=["photo"])
-def handle_channel_photos(message):
+def handle_channel_posts_photos(message):
     procesar_mensajes_privados(message)
 
 
@@ -928,12 +929,6 @@ def procesar_limpieza_y_envio_animalitos(text):
 @bot.channel_post_handler(func=lambda message: True)
 def handle_channel_posts(message):
     text = message.text or message.caption or ""
-    procesar_limpieza_y_envio_animalitos(text)
-
-
-@bot.message_handler(func=lambda message: True, content_types=["text"])
-def handle_direct_messages_animalitos(message):
-    text = message.text or ""
     procesar_limpieza_y_envio_animalitos(text)
 
 
