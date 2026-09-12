@@ -378,6 +378,10 @@ def limpiar_texto(texto):
     return " ".join(texto.split())
 
 
+def normalizar_nombre(texto):
+    return re.sub(r"[^A-Z0-9]", "", texto.upper())
+
+
 def enviar_telegram(mensaje, disable_web_preview=True):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
@@ -796,9 +800,9 @@ def verificar_resultados():
 
                 resultado_final = limpiar_texto(match_res.group(1)).upper()
 
-                clave_slot = (nombre_loteria, hora)
+                # Clave robusta y normalizada para evitar duplicados por variaciones de espacios o nombres en el HTML
+                clave_slot = (normalizar_nombre(nombre_loteria), hora)
 
-                # Evitar procesar duplicados si la misma tarjeta aparece anidada en el HTML
                 if clave_slot in procesados_en_esta_corrida:
                     continue
                 procesados_en_esta_corrida.add(clave_slot)
@@ -832,13 +836,14 @@ def verificar_resultados():
             markup_dict = markup_wa.to_dict()
 
             for item_nuevo in nuevos_encontrados:
-                # 1. Enviar primero el mensaje del resultado oficial con botón de WhatsApp
+                # 1. Enviar primero el mensaje del resultado oficial con el número visible y botón de WhatsApp
                 mensaje_res = (
                     "🎯 AGENCIA HAROLD JOSÉ 🎯\n"
                     "•••••••••••••••••••••••••••••••••••\n"
                     f"🎰 {item_nuevo['loteria']}\n"
                     f"🕒 {item_nuevo['hora']}  {item_nuevo['resultado']}\n"
-                    "•••••••••••••••••••••••••••••••••••"
+                    "•••••••••••••••••••••••••••••••••••\n"
+                    "📲 WHATSAPP: 04124489363"
                 )
                 enviar_telegram_con_botones(mensaje_res, markup_dict)
                 time.sleep(2)
@@ -858,6 +863,7 @@ def verificar_resultados():
                                 f"🎯 {item_nuevo['resultado']}\n"
                                 f"🎲 🎰 {item_nuevo['loteria']}\n"
                                 f"🕒 {item_nuevo['hora']}\n\n"
+                                "📲 WHATSAPP: 04124489363\n\n"
                                 "🍀 ¡Felicidades a todos los que confiaron en Agencia Harold José!"
                             )
                             enviar_telegram_con_botones(mensaje_acierto, markup_dict)
