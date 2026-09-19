@@ -381,14 +381,15 @@ def normalizar_nombre(texto):
     return re.sub(r"[^A-Z0-9]", "", texto.upper())
 
 
-def enviar_telegram(mensaje, disable_web_preview=True):
+def enviar_telegram(mensaje, disable_web_preview=True, parse_mode="Markdown"):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
         "chat_id": CANAL,
         "text": mensaje,
-        "parse_mode": "Markdown",
         "disable_web_page_preview": disable_web_preview,
     }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     try:
         response = http_session.post(url, json=payload, timeout=10)
         if response.status_code != 200:
@@ -538,7 +539,7 @@ def generar_piramide():
         "🔥 DATOS CLAVES PARA HOY:\n"
         f"📌 {d1}\n"
         f"📌 {d2}\n\n"
-        "⚡ ¡La precisión y los números hablan por sí solos! ¡Juega con confianza y gana con nosotros! 🍀 💰"
+        "⚡ ¡La precisión y los números hablan por sí solos! ¡Juega con confianza y gana con nosotros! clés 🍀 💰"
     )
 
 
@@ -769,7 +770,7 @@ def verificar_resultados():
             if not nombre_loteria or len(nombre_loteria) > 40:
                 continue
 
-            nombre_loteria = limpiar_texto(re.sub(r"^[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+", "", nombre_loteria)).upper()
+            nombre_loteria = limpiar_texto(re.sub(r"^[^a-zA-ZáéíóúÁÉÍÓÚÑa-zñáéíóúÑ0-9]+", "", nombre_loteria)).upper()
             if not nombre_loteria:
                 continue
 
@@ -876,7 +877,6 @@ def procesar_limpieza_y_envio_animalitos(text):
         return False
     texto_lower = text.lower()
     
-    # Patrones flexibles para atrapar singular/plural y variaciones
     patrones = [
         r"resultados?\s+programados?",
         r"resultados?\s+animalitos?"
@@ -894,7 +894,8 @@ def procesar_limpieza_y_envio_animalitos(text):
             
     if pos_inicio != -1 and match_encontrado:
         mensaje_completo = f"{HEADER_RESULTADOS}\n\n{match_encontrado}"
-        enviar_telegram(mensaje_completo, disable_web_preview=True)
+        # Se envía con parse_mode=None para evitar que los caracteres especiales rompan el formato
+        enviar_telegram(mensaje_completo, disable_web_preview=True, parse_mode=None)
         logging.info("✅ Mensaje programado / animalitos procesado y enviado con éxito al canal oficial.")
         return True
     return False
@@ -904,7 +905,6 @@ def procesar_mensajes_privados(message):
     global taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id
     caption = message.caption or message.text or ""
     
-    # Evaluar primero si contiene la palabra clave de resultados programados/animalitos
     if procesar_limpieza_y_envio_animalitos(caption):
         return
 
