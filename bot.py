@@ -156,7 +156,6 @@ def guardar_estado_disco():
         logging.warning(f"⚠️ Error guardando estado: {e}")
 
 
-# Cargar estado inicial al arrancar
 cargar_estado_disco()
 
 caption_taquilla = (
@@ -800,7 +799,6 @@ def verificar_resultados():
 
                 resultado_final = limpiar_texto(match_res.group(1)).upper()
 
-                # Clave robusta y normalizada para evitar duplicados por variaciones de espacios o nombres en el HTML
                 clave_slot = (normalizar_nombre(nombre_loteria), hora)
 
                 if clave_slot in procesados_en_esta_corrida:
@@ -836,7 +834,6 @@ def verificar_resultados():
             markup_dict = markup_wa.to_dict()
 
             for item_nuevo in nuevos_encontrados:
-                # 1. Enviar primero el mensaje del resultado oficial con el número visible y botón de WhatsApp
                 mensaje_res = (
                     "🎯 AGENCIA HAROLD JOSÉ 🎯\n"
                     "•••••••••••••••••••••••••••••••••••\n"
@@ -848,7 +845,6 @@ def verificar_resultados():
                 enviar_telegram_con_botones(mensaje_res, markup_dict)
                 time.sleep(2)
 
-                # 2. Comprobar si es un acierto de los regalos del día para enviarlo después
                 num_match = re.search(r"^(\d{1,2})", item_nuevo['resultado'])
                 if num_match and regalos_hoy:
                     num_limpio = num_match.group(1)
@@ -875,9 +871,43 @@ def verificar_resultados():
         traceback.print_exc()
 
 
+def procesar_limpieza_y_envio_animalitos(text):
+    if not text:
+        return False
+    texto_lower = text.lower()
+    
+    # Patrones flexibles para atrapar singular/plural y variaciones
+    patrones = [
+        r"resultados?\s+programados?",
+        r"resultados?\s+animalitos?"
+    ]
+    
+    pos_inicio = -1
+    match_encontrado = None
+    
+    for patron in patrones:
+        match = re.search(patron, texto_lower)
+        if match:
+            pos_inicio = match.start()
+            match_encontrado = text[pos_inicio:].strip()
+            break
+            
+    if pos_inicio != -1 and match_encontrado:
+        mensaje_completo = f"{HEADER_RESULTADOS}\n\n{match_encontrado}"
+        enviar_telegram(mensaje_completo, disable_web_preview=True)
+        logging.info("✅ Mensaje programado / animalitos procesado y enviado con éxito al canal oficial.")
+        return True
+    return False
+
+
 def procesar_mensajes_privados(message):
     global taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id
     caption = message.caption or message.text or ""
+    
+    # Evaluar primero si contiene la palabra clave de resultados programados/animalitos
+    if procesar_limpieza_y_envio_animalitos(caption):
+        return
+
     caption_lower = caption.lower()
 
     if "taquilla activa" in caption_lower:
@@ -921,23 +951,11 @@ def handle_text_messages(message):
     procesar_mensajes_privados(message)
 
 
-def procesar_limpieza_y_envio_animalitos(text):
-    texto_lower = text.lower()
-    if "resultado programado" in texto_lower or "resultados animalitos" in texto_lower:
-        clave_corte = "resultados animalitos" if "resultados animalitos" in texto_lower else "resultado programado"
-        pos = texto_lower.find(clave_corte)
-        texto_limpio = text[pos:].strip()
-        mensaje_completo = f"{HEADER_RESULTADOS}\n\n{texto_limpio}"
-        enviar_telegram(mensaje_completo, disable_web_preview=True)
-        logging.info("✅ Mensaje programado / animalitos enviado con éxito.")
-        return True
-    return False
-
-
 @bot.channel_post_handler(func=lambda message: True)
 def handle_channel_posts(message):
     text = message.text or message.caption or ""
-    procesar_limpieza_y_envio_animalitos(text)
+    if not procesar_limpieza_y_envio_animalitos(text):
+        procesar_mensajes_privados(message)
 
 
 def iniciar_scheduler():
@@ -953,9 +971,7 @@ def iniciar_scheduler():
     scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=15, minute=0)
     scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=18, minute=0)
 
-    # Avisos de Cashea programados cada hora de 9 AM a 5 PM (9:00, 10:00, 11:00, 12:00, 13:00, 14:00, 15:00, 16:00, 17:00)
     scheduler.add_job(enviar_anuncio_cashea, "cron", hour="9-17", minute=0)
-
     scheduler.add_job(enviar_aviso_tiempo_cumplido, "cron", hour="7-19", minute=55)
     scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
     scheduler.add_job(tarea_minuto_diez, "cron", hour="7-17", minute=10)
