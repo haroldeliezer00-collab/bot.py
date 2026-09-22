@@ -25,9 +25,9 @@ logging.basicConfig(
 # Forzar la zona horaria de Venezuela de forma segura
 os.environ["TZ"] = "America/Caracas"
 try:
-    time.tzset()
+  time.tzset()
 except Exception as e:
-    logging.warning(f"⚠️ Nota sobre tzset: {e}")
+  logging.warning(f"⚠️ Nota sobre tzset: {e}")
 
 # Desactivar advertencias de certificados SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -761,6 +761,8 @@ def verificar_resultados():
       return
 
     soup = BeautifulSoup(respuesta.text, "html.parser")
+
+    # Buscar contenedores principales que agrupen las loterías individuales
     tarjetas = soup.find_all(
         ["div", "article", "section"],
         class_=re.compile(r"card|box|item|lotto|result", re.IGNORECASE),
@@ -772,11 +774,23 @@ def verificar_resultados():
     procesados_en_esta_corrida = set()
 
     for tarjeta in tarjetas:
+      texto_completo_tarjeta = tarjeta.get_text(" ", strip=True).upper()
+
+      # Ignorar por completo la sección de "RESULTADOS DE HOY" o "ÚLTIMOS SALIDOS"
+      if (
+          "RESULTADOS DE HOY" in texto_completo_tarjeta
+          or "ÚLTIMOS SALIDOS" in texto_completo_tarjeta
+          or "ULTIMOS SALIDOS" in texto_completo_tarjeta
+      ):
+        continue
+
+      # Intentar extraer el nombre de la lotería estrictamente del bloque actual de forma dinámica
       nombre_loteria = ""
       posibles_titulos = tarjeta.find_all(
           ["h1", "h2", "h3", "h4", "h5", "span", "div", "strong", "b"],
           class_=re.compile(r"title|header|name|lotto|text", re.IGNORECASE),
       )
+
       for pt in posibles_titulos:
         t_text = limpiar_texto(pt.get_text(" ", strip=True)).upper()
         if (
@@ -784,27 +798,14 @@ def verificar_resultados():
             and len(t_text) > 2
             and not re.search(r"\d{1,2}:\d{2}", t_text)
             and "PENDIENTE" not in t_text
+            and "RESULTADOS" not in t_text
+            and "WINBIG" not in t_text
+            and "HOY" not in t_text
         ):
-          if t_text not in ["WINBIG", "RESULTADOS"]:
-            nombre_loteria = t_text
-            break
+          nombre_loteria = t_text
+          break
 
-      if not nombre_loteria:
-        lineas = [
-            limpiar_texto(l).upper()
-            for l in tarjeta.get_text("\n", strip=True).split("\n")
-            if l.strip()
-        ]
-        for linea in lineas:
-          if (
-              len(linea) > 2
-              and not re.search(r"\d{1,2}:\d{2}", linea)
-              and "PENDIENTE" not in linea
-              and "-" not in linea
-          ):
-            nombre_loteria = linea
-            break
-
+      # Si no se encuentra un título seguro dentro del bloque, se ignora en lugar de asumir un nombre incorrecto
       if not nombre_loteria or len(nombre_loteria) > 40:
         continue
 
@@ -814,6 +815,7 @@ def verificar_resultados():
       if not nombre_loteria:
         continue
 
+      # Buscar los slots o elementos de sorteo dentro de ESTE bloque exclusivamente
       slots_sorteo = tarjeta.find_all(
           ["div", "li", "span", "tr"],
           class_=re.compile(r"item|slot|draw|row|col", re.IGNORECASE),
