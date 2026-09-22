@@ -793,9 +793,11 @@ def verificar_resultados():
 
       for pt in posibles_titulos:
         t_text = limpiar_texto(pt.get_text(" ", strip=True)).upper()
+        # Se agrega 'any(c.isalpha() for c in t_text)' para descartar números puros (como IDs o contadores tipo "100")
         if (
             t_text
             and len(t_text) > 2
+            and any(c.isalpha() for c in t_text)
             and not re.search(r"\d{1,2}:\d{2}", t_text)
             and "PENDIENTE" not in t_text
             and "RESULTADOS" not in t_text
