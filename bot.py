@@ -111,6 +111,9 @@ def cargar_estado_disco():
     try:
       with open(STATE_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
+        # La imagen de Cashea se carga siempre de forma persistente sin importar el día
+        imagen_cashea_file_id = data.get("imagen_cashea", None)
+
         hoy_str = datetime.now().strftime("%Y-%m-%d")
         if data.get("fecha") == hoy_str:
           horarios_enviados_hoy = set(tuple(x) for x in data.get("enviados", []))
@@ -122,7 +125,6 @@ def cargar_estado_disco():
                 h_data[1],
             )
           taquilla_activa_hoy = data.get("taquilla_activa", False)
-          imagen_cashea_file_id = data.get("imagen_cashea", None)
           regalos_hoy = data.get("regalos_hoy", [])
           logging.info(
               f"📂 Estado cargado desde disco. Slots bloqueados:"
@@ -135,7 +137,6 @@ def cargar_estado_disco():
   primera_ejecucion = True
   ultima_hora_polla = None
   taquilla_activa_hoy = False
-  imagen_cashea_file_id = None
   regalos_hoy = []
 
 
@@ -145,13 +146,24 @@ def guardar_estado_disco():
     polla_serializable = None
     if ultima_hora_polla:
       polla_serializable = [str(ultima_hora_polla[0]), ultima_hora_polla[1]]
+
+    # Asegurar que no se pierda la imagen de cashea existente en disco si la variable temporal está vacía
+    existing_cashea = imagen_cashea_file_id
+    if not existing_cashea and os.path.exists(STATE_FILE):
+      try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+          old_data = json.load(f)
+          existing_cashea = old_data.get("imagen_cashea", None)
+      except Exception:
+        pass
+
     data = {
         "fecha": hoy_str,
         "enviados": [list(x) for x in horarios_enviados_hoy],
         "primera_ejecucion": primera_ejecucion,
         "ultima_polla_hora": polla_serializable,
         "taquilla_activa": taquilla_activa_hoy,
-        "imagen_cashea": imagen_cashea_file_id,
+        "imagen_cashea": existing_cashea,
         "regalos_hoy": regalos_hoy,
     }
     with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -186,7 +198,7 @@ TEXTO_PUBLICITARIO = (
     "💳 Pago Móvil y Transferencias\n"
     "🚀 Cupos altos para jugar en grande\n"
     "👇 REVISA TODO LO QUE TENEMOS DISPONIBLE 👇\n"
-    "‎➖➖➖➖➖➖➖➖➖➖\n"
+    "➖➖➖➖➖➖➖➖➖➖\n"
     "🎰 RULETAS DISPONIBLES 🎰\n"
     "• Lotto Activo\n"
     "• La Granjita\n"
@@ -213,8 +225,10 @@ TEXTO_PUBLICITARIO = (
     "• Granjazo\n"
     "• Lotto Gato\n"
     "• Gatazo\n"
-    "• Calamar Millonario\n"
-    "‎➖➖➖➖➖➖➖➖➖➖\n"
+    "• Calamar Millonario A-B\n"
+    "• Lotto Pantera\n"
+    "• Loto Animalito\n"
+    "➖➖➖➖➖➖➖➖➖➖\n"
     "🔢 TRIPLES Y TERMINALES 🔢\n"
     "• Trio Activo\n"
     "• Triple Fácil\n"
@@ -230,7 +244,7 @@ TEXTO_PUBLICITARIO = (
     "• Triple Centena\n"
     "• Triple Dorado\n"
     "• La Ruca\n"
-    "‎➖➖➖➖➖➖➖➖➖➖\n"
+    "➖➖➖➖➖➖➖➖➖➖\n"
     "🎰 TRIPLETAS DISPONIBLES 🎰\n"
     "⚠️ SÓLO SE SELLA HASTA LAS 8:50 AM\n"
     "🚫 NO VENDO BASES\n"
@@ -239,17 +253,17 @@ TEXTO_PUBLICITARIO = (
     "• Guacharito Millonario | Monje Millonario | Tropi Gana | Cóndor Gana |"
     " Granja Millonaria | Fruti Gana | Granjazo | Lotto Max | Ruleta Activa |"
     " Guaca37....\n"
-    "‎➖➖➖➖➖➖➖➖➖➖\n"
+    "➖➖➖➖➖➖➖➖➖➖\n"
     "🎊 POLLAS Y DUPLETAS 🎊\n"
     "• Polla Animaniacs | Mini Polla\n"
     "• Pozo Millonario | Super Polla\n"
     "• Super Seven | Micro Polla\n"
     "• Sumatoria Niño de Oro\n"
     "• Polla por Puntos | Dupletas y más...\n"
-    "‎➖➖➖➖➖➖➖➖➖➖\n"
+    "➖➖➖➖➖➖➖➖➖➖\n"
     "🌐 BINGOS DISPONIBLES 🌐\n"
     "• BINGO MILLONARIO PLUS\n"
-    "‎➖➖➖➖➖➖➖➖➖➖\n"
+    "➖➖➖➖➖➖➖➖➖➖\n"
     "📢 ÚNETE A NUESTRA COMUNIDAD OFICIAL 🎲🔥\n"
     "📲 Entra a nuestro canal de Telegram y consulta todos los resultados:\n"
     f"👉 {ENLACE_CANAL}\n"
@@ -285,7 +299,7 @@ def home():
       else "DESACTIVADA 🔴 (No laborando)"
   )
   cashea_tag = (
-      "CONFIGURADA 🟢 (Imagen cargada)"
+      "CONFIGURADA 🟢 (Imagen persistente cargada)"
       if imagen_cashea_file_id
       else "SOLO TEXTO 🟡 (Sin imagen aún)"
   )
@@ -300,8 +314,8 @@ def home():
       " Regalos de la Agencia (6:45 AM)</a><br>👉 <a href='/test/saludo'>Probar"
       " Saludo Matutino (7:00 AM)</a><br>👉 <a href='/test/publicidad'>Probar"
       " Aviso Publicitario (7am/3pm/6pm)</a><br>👉 <a"
-      " href='/test/cashea'>Probar Aviso con Botones Cashea (Cada hora de 9am a"
-      " 5pm)</a><br>👉 <a href='/test/tiempocumplido'>Probar Tiempo Cumplido"
+      " href='/test/cashea'>Probar Aviso con Botones Cashea (9am a 4:30"
+      " pm)</a><br>👉 <a href='/test/tiempocumplido'>Probar Tiempo Cumplido"
       " (Minuto 55)</a><br>👉 <a href='/test/bcv'>Probar Tasa Oficial"
       " BCV</a><br>👉 <a href='/test/taquilla_manual'>Probar Envío Manual de"
       " Taquilla Activa</a><br>👉 <a href='/test/pollas'>Probar Aviso de Pollas"
@@ -480,17 +494,18 @@ def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
 
 
 def limpiar_memoria_diaria():
-  global horarios_enviados_hoy, primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id, ultima_hora_polla, regalos_hoy
+  global horarios_enviados_hoy, primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id, ultima_hora_polla, regalos_hoy
   horarios_enviados_hoy.clear()
   primera_ejecucion = True
   taquilla_activa_hoy = False
   imagen_taquilla_file_id = None
-  imagen_cashea_file_id = None
+  # NOTA: imagen_cashea_file_id NO se limpia aquí para que persista permanentemente entre días
   ultima_hora_polla = None
   regalos_hoy = []
-  if os.path.exists(STATE_FILE):
-    os.remove(STATE_FILE)
-  logging.info("🧹 Memoria y archivo de disco limpiados para el nuevo día.")
+  guardar_estado_disco()
+  logging.info(
+      "🧹 Memoria diaria limpiada. La imagen de Cashea se mantiene guardada."
+  )
 
 
 def enviar_saludo_madrugada():
@@ -743,7 +758,7 @@ def enviar_mensaje_cierre():
   )
   taquilla_activa_hoy = False
   imagen_taquilla_file_id = None
-  imagen_cashea_file_id = None
+  # NOTA: imagen_cashea_file_id se preserva a propósito para el día siguiente
   ultima_hora_polla = None
   regalos_hoy = []
   guardar_estado_disco()
@@ -947,11 +962,12 @@ def procesar_mensajes_privados(message):
       guardar_estado_disco()
       bot.reply_to(
           message,
-          "✅ ¡Imagen de Cashea guardada con éxito! Se enviará automáticamente"
-          " en sus horarios programados (de 9 AM a 5 PM).",
+          "✅ ¡Imagen de Cashea guardada y actualizada permanentemente! Se"
+          " enviará automáticamente en sus horarios programados (de 9 AM a 4:30"
+          " PM).",
       )
       logging.info(
-          "✅ Imagen de Cashea registrada y almacenada sin envío inmediato."
+          "✅ Imagen de Cashea permanente registrada y almacenada en disco."
       )
     else:
       bot.reply_to(
@@ -1015,7 +1031,9 @@ def iniciar_scheduler():
   scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=15, minute=0)
   scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=18, minute=0)
 
-  scheduler.add_job(enviar_anuncio_cashea, "cron", hour="9-17", minute=0)
+  # Horario actualizado de Cashea: Cada hora de 9 AM a 4 PM, y el último aviso a las 4:30 PM
+  scheduler.add_job(enviar_anuncio_cashea, "cron", hour="9-16", minute=0)
+  scheduler.add_job(enviar_anuncio_cashea, "cron", hour=16, minute=30)
 
   scheduler.add_job(enviar_aviso_tiempo_cumplido, "cron", hour="7-19", minute=55)
   scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
