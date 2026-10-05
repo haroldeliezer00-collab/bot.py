@@ -13,7 +13,12 @@ from flask import Flask, request
 import requests
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
-import urllib3
+urllib3 = None
+try:
+  import urllib3
+  urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except Exception:
+  pass
 
 # Configuración de logging profesional para Render
 logging.basicConfig(
@@ -28,9 +33,6 @@ try:
   time.tzset()
 except Exception as e:
   logging.warning(f"⚠️ Nota sobre tzset: {e}")
-
-# Desactivar advertencias de certificados SSL
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Credenciales y canal principal configurado
 TOKEN = os.environ.get(
@@ -47,6 +49,7 @@ URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_RULETA_ACTIVA = "https://www.ruletactiva.com.ve"
 URL_BCV = "https://www.bcv.org.ve/"
 STATE_FILE = "bot_state.json"
+LOCK_FILE = "state_lock.lock"
 
 # Sesión HTTP optimizada para reuso de conexiones
 http_session = requests.Session()
@@ -54,8 +57,6 @@ http_session.headers.update(
     {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
 )
 
-# Control estricto anti-duplicados y memoria
-horarios_enviados_hoy = set()
 primera_ejecucion = True
 ultima_hora_polla = None
 
@@ -118,7 +119,7 @@ def normalizar_num(num_str):
 
 
 def cargar_estado_disco():
-  global horarios_enviados_hoy, primera_ejecucion, ultima_hora_polla, taquilla_activa_hoy, imagen_cashea_file_id, regalos_hoy, tripleta_enviada_hoy, resultados_por_sorteo
+  global primera_ejecucion, ultima_hora_polla, taquilla_activa_hoy, imagen_cashea_file_id, regalos_hoy, tripleta_enviada_hoy, resultados_por_sorteo
   if os.path.exists(STATE_FILE):
     try:
       with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -127,7 +128,6 @@ def cargar_estado_disco():
 
         hoy_str = datetime.now().strftime("%Y-%m-%d")
         if data.get("fecha") == hoy_str:
-          horarios_enviados_hoy = set(tuple(x) for x in data.get("enviados", []))
           primera_ejecucion = data.get("primera_ejecucion", False)
           if data.get("ultima_polla_hora"):
             h_data = data.get("ultima_polla_hora")
@@ -138,14 +138,10 @@ def cargar_estado_disco():
           taquilla_activa_hoy = data.get("taquilla_activa", False)
           regalos_hoy = data.get("regalos_hoy", [])
           tripleta_enviada_hoy = data.get("tripleta_enviada", False)
-          logging.info(
-              f"📂 Estado cargado desde disco. Slots bloqueados:"
-              f" {len(horarios_enviados_hoy)}"
-          )
+          logging.info("📂 Estado cargado desde disco correctamente.")
           return
     except Exception as e:
       logging.warning(f"⚠️ Error cargando estado: {e}")
-  horarios_enviados_hoy = set()
   primera_ejecucion = True
   ultima_hora_polla = None
   taquilla_activa_hoy = False
@@ -170,20 +166,70 @@ def guardar_estado_disco():
       except Exception:
         pass
 
-    data = {
+    data = {}
+    if os.path.exists(STATE_FILE):
+      try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+          data = json.load(f)
+      except Exception:
+        pass
+
+    data.update({
         "fecha": hoy_str,
-        "enviados": [list(x) for x in horarios_enviados_hoy],
         "primera_ejecucion": primera_ejecucion,
         "ultima_polla_hora": polla_serializable,
         "taquilla_activa": taquilla_activa_hoy,
         "imagen_cashea": existing_cashea,
         "regalos_hoy": regalos_hoy,
         "tripleta_enviada": tripleta_enviada_hoy,
-    }
+    })
+    if "enviados" not in data:
+      data["enviados"] = []
+
     with open(STATE_FILE, "w", encoding="utf-8") as f:
       json.dump(data, f, ensure_ascii=False, indent=2)
   except Exception as e:
     logging.warning(f"⚠️ Error guardando estado: {e}")
+
+
+def slot_ya_enviado_o_marcar(clave_slot_str):
+  """Bloqueo atómico multi-worker para evitar duplicados en Gunicorn"""
+  try:
+    with open(LOCK_FILE, "w") as lock_f:
+      if os.name != "nt":
+        import fcntl
+        fcntl.flock(lock_f, fcntl.LOCK_EX)
+
+      hoy_str = datetime.now().strftime("%Y-%m-%d")
+      data = {"fecha": hoy_str, "enviados": [], "primera_ejecucion": primera_ejecucion}
+      if os.path.exists(STATE_FILE):
+        try:
+          with open(STATE_FILE, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+            if loaded.get("fecha") == hoy_str:
+              data = loaded
+        except Exception:
+          pass
+
+      enviados = data.get("enviados", [])
+      if clave_slot_str in enviados:
+        if os.name != "nt":
+          fcntl.flock(lock_f, fcntl.LOCK_UN)
+        return True  # Ya fue enviado por otro worker
+
+      enviados.append(clave_slot_str)
+      data["enviados"] = enviados
+      data["fecha"] = hoy_str
+
+      with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+      if os.name != "nt":
+        fcntl.flock(lock_f, fcntl.LOCK_UN)
+      return False  # Es nuevo, proceder a enviar
+  except Exception as e:
+    logging.error(f"Error en slot_ya_enviado_o_marcar: {e}")
+    return False
 
 
 cargar_estado_disco()
@@ -321,25 +367,10 @@ def home():
       f"¡El bot de resultados de la AGENCIA HAROLD JOSÉ está activo en el canal"
       f" oficial {CANAL}!<br><br><b>Estado del aviso de taquilla de hoy:</b>"
       f" {estado_tag}<br><b>Estado de la imagen de Cashea:</b>"
-      f" {cashea_tag}<br><br><b>Enlaces de prueba rápida (Test de cada"
-      " opción):</b><br>👉 <a href='/test/madrugada'>Probar Saludo de Madrugada"
-      " (6:30 AM)</a><br>👉 <a href='/test/piramide'>Probar Pirámide Numérica"
-      " con Sumas por Fila (6:31 AM)</a><br>👉 <a href='/test/regalos'>Probar"
-      " Regalos de la Agencia (6:45 AM)</a><br>👉 <a href='/test/saludo'>Probar"
-      " Saludo Matutino (7:00 AM)</a><br>👉 <a href='/test/publicidad'>Probar"
-      " Aviso Publicitario (7am/3pm/6pm)</a><br>👉 <a"
-      " href='/test/cashea'>Probar Aviso con Botones Cashea (9am a 4:30"
-      " pm)</a><br>👉 <a href='/test/tiempocumplido'>Probar Tiempo Cumplido"
-      " (Minuto 55)</a><br>👉 <a href='/test/bcv'>Probar Tasa Oficial"
-      " BCV</a><br>👉 <a href='/test/taquilla_manual'>Probar Envío Manual de"
-      " Taquilla Activa</a><br>👉 <a href='/test/pollas'>Probar Aviso de Pollas"
-      " (Minuto 10)</a><br>👉 <a href='/test/resultados'>Forzar Revisión de"
-      " Resultados Individuales</a><br>👉 <a href='/test/cierre'>Probar Mensaje"
-      " de Cierre (9:10 PM)</a>"
+      f" {cashea_tag}"
   )
 
 
-# --- RUTAS DE WEBHOOK DE TELEGRAM ---
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
   if request.headers.get("content-type") == "application/json":
@@ -407,7 +438,7 @@ def test_taquilla_manual():
     enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
   else:
     enviar_telegram(caption_taquilla, disable_web_preview=True)
-  return "Prueba de Taquilla Activa ejecutada (y estado marcado como activado)."
+  return "Prueba de Taquilla Activa ejecutada."
 
 
 @app.route("/test/pollas")
@@ -482,9 +513,7 @@ def enviar_telegram_foto(photo_id, caption):
     if response.status_code != 200:
       logging.warning(f"⚠️ Error al enviar foto al canal: {response.text}")
   except Exception as e:
-    logging.warning(
-        f"⚠️ Excepción de conexión con Telegram al enviar foto: {e}"
-    )
+    logging.warning(f"⚠️️ Excepción al enviar foto: {e}")
 
 
 def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
@@ -500,16 +529,13 @@ def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
   try:
     response = http_session.post(url, json=payload, timeout=10)
     if response.status_code != 200:
-      logging.warning(
-          f"⚠️ Error al enviar foto con botones al canal: {response.text}"
-      )
+      logging.warning(f"⚠️ Error al enviar foto con botones: {response.text}")
   except Exception as e:
     logging.warning(f"⚠️ Excepción al enviar foto con botones: {e}")
 
 
 def limpiar_memoria_diaria():
-  global horarios_enviados_hoy, primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id, ultima_hora_polla, regalos_hoy, tripleta_enviada_hoy, resultados_por_sorteo
-  horarios_enviados_hoy.clear()
+  global primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id, ultima_hora_polla, regalos_hoy, tripleta_enviada_hoy, resultados_por_sorteo
   primera_ejecucion = True
   taquilla_activa_hoy = False
   imagen_taquilla_file_id = None
@@ -518,9 +544,7 @@ def limpiar_memoria_diaria():
   tripleta_enviada_hoy = False
   resultados_por_sorteo = {}
   guardar_estado_disco()
-  logging.info(
-      "🧹 Memoria diaria limpiada. La imagen de Cashea se mantiene guardada."
-  )
+  logging.info("🧹 Memoria diaria limpiada.")
 
 
 def enviar_saludo_madrugada():
@@ -609,7 +633,7 @@ def enviar_piramide_diaria():
   enviar_telegram(generar_piramide(), disable_web_preview=True)
 
 
-def generar_regalos_agencia():
+def enviar_regalos_agencia():
   global regalos_hoy
   ahora = datetime.now()
   fecha_str = ahora.strftime("%d/%m/%Y")
@@ -647,8 +671,8 @@ def generar_regalos_agencia():
   )
 
 
-def enviar_regalos_agencia():
-  enviar_telegram(generar_regalos_agencia(), disable_web_preview=True)
+def enviar_regalos_agencia_handler():
+  enviar_telegram(enviar_regalos_agencia(), disable_web_preview=True)
 
 
 def enviar_saludo_matutino():
@@ -737,11 +761,6 @@ def tarea_envio_programado_taquilla():
     else:
       enviar_telegram(caption_taquilla, disable_web_preview=True)
       logging.info("✅ Taquilla activa reenviada por texto a las 3:00 PM.")
-  else:
-    logging.info(
-        "ℹ️ A las 3:00 PM la taquilla no fue activada en la mañana, se omite el"
-        " envío."
-    )
 
 
 def tarea_minuto_diez():
@@ -758,7 +777,7 @@ def tarea_minuto_diez():
       guardar_estado_disco()
       enviar_telegram(
           "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n📢 ¡Pollas actualizadas!\nPuedes verlas"
-          f" hier 👇🏻\n{ENLACE_POLLAS}\n\n¡Mucho éxito! 🍀",
+          f" aquí 👇🏻\n{ENLACE_POLLAS}\n\n¡Mucho éxito! 🍀",
           disable_web_preview=False,
       )
 
@@ -826,7 +845,7 @@ def verificar_y_enviar_tripleta(loteria_nombre, hora_sorteo):
 
 
 def verificar_resultados():
-  global horarios_enviados_hoy, primera_ejecucion, regalos_hoy, resultados_por_sorteo
+  global primera_ejecucion, regalos_hoy, resultados_por_sorteo
   try:
     # 1. PROCESAR LOTERÍAS NORMALES DESDE WINBIG
     respuesta = http_session.get(URL_LOTERIA, timeout=15)
@@ -911,6 +930,7 @@ def verificar_resultados():
 
           resultado_final = limpiar_texto(match_res.group(1)).upper()
           clave_slot = (normalizar_nombre(nombre_loteria), hora)
+          slot_str_id = f"{normalizar_nombre(nombre_loteria)}_{hora}_{resultado_final}"
 
           num_m = re.search(r"^(\d{1,2})", resultado_final)
           if num_m:
@@ -920,14 +940,14 @@ def verificar_resultados():
                 normalizar_num(num_m.group(1))
             )
 
-          if clave_slot in procesados_en_esta_corrida:
+          if slot_str_id in procesados_en_esta_corrida:
             continue
-          procesados_en_esta_corrida.add(clave_slot)
+          procesados_en_esta_corrida.add(slot_str_id)
 
           if primera_ejecucion:
-            horarios_enviados_hoy.add(clave_slot)
+            slot_ya_enviado_o_marcar(slot_str_id)
           else:
-            if clave_slot not in horarios_enviados_hoy:
+            if not slot_ya_enviado_o_marcar(slot_str_id):
               item_dict = {
                   "loteria": nombre_loteria,
                   "hora": hora,
@@ -935,14 +955,12 @@ def verificar_resultados():
               }
               if item_dict not in nuevos_encontrados:
                 nuevos_encontrados.append(item_dict)
-                horarios_enviados_hoy.add(clave_slot)
-                guardar_estado_disco()
                 logging.info(
                     f"✨ Nuevo resultado detectado: {nombre_loteria} - {hora} -"
                     f" {resultado_final}"
                 )
 
-      # 2. PROCESAR RULETA ACTIVA (Soporte A, B, C, D con prioridad en D)
+      # 2. PROCESAR RULETA ACTIVA
       try:
         urls_ra = [URL_LOTERIA, URL_RULETA_ACTIVA]
         for url_fuente in urls_ra:
@@ -986,6 +1004,7 @@ def verificar_resultados():
                 resultado_d = posiciones["D"]
                 nombre_loteria_ra = "RULETA ACTIVA"
                 clave_slot_ra = (normalizar_nombre(nombre_loteria_ra), hora_ra)
+                slot_str_id_ra = f"{normalizar_nombre(nombre_loteria_ra)}_{hora_ra}_{resultado_d}"
 
                 if clave_slot_ra not in resultados_por_sorteo:
                   resultados_por_sorteo[clave_slot_ra] = set()
@@ -996,27 +1015,25 @@ def verificar_resultados():
                         normalizar_num(nm.group(1))
                     )
 
-                if clave_slot_ra not in procesados_en_esta_corrida:
-                  procesados_en_esta_corrida.add(clave_slot_ra)
+                if slot_str_id_ra in procesados_en_esta_corrida:
+                  continue
+                procesados_en_esta_corrida.add(slot_str_id_ra)
 
-                  if primera_ejecucion:
-                    horarios_enviados_hoy.add(clave_slot_ra)
-                  else:
-                    if clave_slot_ra not in horarios_enviados_hoy:
-                      item_dict_ra = {
-                          "loteria": nombre_loteria_ra,
-                          "hora": hora_ra,
-                          "resultado": resultado_d,
-                      }
-                      if item_dict_ra not in nuevos_encontrados:
-                        nuevos_encontrados.append(item_dict_ra)
-                        horarios_enviados_hoy.add(clave_slot_ra)
-                        guardar_estado_disco()
-                        logging.info(
-                            f"✨ Nuevo resultado Ruleta Activa detectado:"
-                            f" {nombre_loteria_ra} - {hora_ra} - {resultado_d}"
-                            " (Prioridad D)"
-                        )
+                if primera_ejecucion:
+                  slot_ya_enviado_o_marcar(slot_str_id_ra)
+                else:
+                  if not slot_ya_enviado_o_marcar(slot_str_id_ra):
+                    item_dict_ra = {
+                        "loteria": nombre_loteria_ra,
+                        "hora": hora_ra,
+                        "resultado": resultado_d,
+                    }
+                    if item_dict_ra not in nuevos_encontrados:
+                      nuevos_encontrados.append(item_dict_ra)
+                      logging.info(
+                          f"✨ Nuevo resultado Ruleta Activa detectado:"
+                          f" {nombre_loteria_ra} - {hora_ra} - {resultado_d}"
+                      )
           except Exception as e_sub:
             logging.debug(f"Nota en fuente Ruleta Activa {url_fuente}: {e_sub}")
             continue
@@ -1027,10 +1044,7 @@ def verificar_resultados():
       if primera_ejecucion:
         primera_ejecucion = False
         guardar_estado_disco()
-        logging.info(
-            "✅ Sincronización inicial completada. Slots bloqueados en memoria:"
-            f" {len(horarios_enviados_hoy)}"
-        )
+        logging.info("✅ Sincronización inicial completada sin spam.")
         return
 
       if nuevos_encontrados:
@@ -1094,32 +1108,16 @@ def procesar_mensajes_privados(message):
       imagen_taquilla_file_id = message.photo[-1].file_id
       guardar_estado_disco()
       enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
-      logging.info("✅ Taquilla activada y publicada con la imagen adjunta.")
     else:
       taquilla_activa_hoy = True
       guardar_estado_disco()
       enviar_telegram(caption_taquilla, disable_web_preview=True)
-      logging.info("✅ Taquilla activada por texto.")
 
   elif "cashea" in caption_lower:
     if message.photo:
       imagen_cashea_file_id = message.photo[-1].file_id
       guardar_estado_disco()
-      bot.reply_to(
-          message,
-          "✅ ¡Imagen de Cashea guardada y actualizada permanentemente! Se"
-          " enviará automáticamente en sus horarios programados (de 9 AM a 4:30"
-          " PM).",
-      )
-      logging.info(
-          "✅ Imagen de Cashea permanente registrada y almacenada en disco."
-      )
-    else:
-      bot.reply_to(
-          message,
-          "ℹ️ Por favor adjunta la imagen con la palabra 'cashea' para"
-          " actualizarla correctamente.",
-      )
+      bot.reply_to(message, "✅ ¡Imagen de Cashea guardada correctamente!")
 
 
 @bot.message_handler(content_types=["photo"])
@@ -1152,7 +1150,6 @@ def procesar_limpieza_y_envio_animalitos(text):
     texto_limpio = text[pos:].strip()
     mensaje_completo = f"{HEADER_RESULTADOS}\n\n{texto_limpio}"
     enviar_telegram(mensaje_completo, disable_web_preview=True)
-    logging.info("✅ Mensaje programado / animalitos enviado con éxito.")
     return True
   return False
 
@@ -1167,7 +1164,7 @@ def iniciar_scheduler():
   scheduler.add_job(limpiar_memoria_diaria, "cron", hour=0, minute=0)
   scheduler.add_job(enviar_saludo_madrugada, "cron", hour=6, minute=30)
   scheduler.add_job(enviar_piramide_diaria, "cron", hour=6, minute=31)
-  scheduler.add_job(enviar_regalos_agencia, "cron", hour=6, minute=45)
+  scheduler.add_job(enviar_regalos_agencia_handler, "cron", hour=6, minute=45)
   scheduler.add_job(enviar_saludo_matutino, "cron", hour=7, minute=0)
   scheduler.add_job(enviar_tasa_dolar, "cron", hour=6, minute=30)
   scheduler.add_job(enviar_tasa_dolar, "cron", hour=18, minute=30)
@@ -1199,42 +1196,31 @@ def configurar_webhook():
       logging.info(f"✅ Webhook configurado exitosamente en: {webhook_url}")
     except Exception as e:
       logging.error(f"❌ Error configurando el webhook: {e}")
-  else:
-    logging.warning("⚠️ RENDER_EXTERNAL_URL no está definido.")
 
+
+# --- INICIO PROTEGIDO CONTRA DUPLICACIÓN MULTI-WORKER ---
+iniciar_hilo = True
+try:
+  with open("scheduler_run.lock", "w") as lock_f:
+    if os.name != "nt":
+      import fcntl
+      fcntl.flock(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except Exception:
+  iniciar_hilo = False
+
+if iniciar_hilo:
+  t_schedule = Thread(target=iniciar_scheduler)
+  t_schedule.daemon = True
+  t_schedule.start()
+  logging.info("⚙️ Planificador iniciado en este proceso principal exclusivo.")
+else:
+  logging.info("ℹ️ Planificador omitido en este worker secundario para prevenir duplicados.")
 
 if __name__ == "__main__":
   try:
-    logging.info("🚀 Iniciando aplicación principal...")
-
-    # Mecanismo de bloqueo para evitar duplicación del scheduler en múltiples workers
-    iniciar_hilo = True
-    lock_path = "scheduler_run.lock"
-    try:
-      lock_file = open(lock_path, "w")
-      if os.name != "nt":
-        import fcntl
-
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except Exception:
-      iniciar_hilo = (
-          False  # Otro proceso/worker ya está ejecutando el scheduler
-      )
-
-    if iniciar_hilo:
-      t_schedule = Thread(target=iniciar_scheduler)
-      t_schedule.daemon = True
-      t_schedule.start()
-      logging.info("⚙️ BackgroundScheduler iniciado en este proceso principal.")
-    else:
-      logging.info(
-          "ℹ️ Scheduler omitido en este worker secundario para prevenir spam."
-      )
-
     configurar_webhook()
-
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, use_reloader=False)
   except Exception as e:
-    logging.critical(f"❌ Error crítico en ejecución principal: {e}")
+    logging.critical(f"❌ Error crítico: {e}")
     traceback.print_exc()
