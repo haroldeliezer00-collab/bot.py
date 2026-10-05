@@ -6,11 +6,13 @@ import random
 import re
 from threading import Thread
 import time
+database = None
 import traceback
 from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
 from flask import Flask, request
 import requests
+import sqlite3
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 import urllib3
@@ -46,6 +48,7 @@ scheduler = BackgroundScheduler(timezone="America/Caracas")
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
 STATE_FILE = "bot_state.json"
+DB_FILE = "bot_results.db"
 
 # Sesión HTTP optimizada para reuso de conexiones
 http_session = requests.Session()
@@ -54,7 +57,6 @@ http_session.headers.update(
 )
 
 # Control estricto anti-duplicados y memoria
-horarios_enviados_hoy = set()
 primera_ejecucion = True
 ultima_hora_polla = None
 
@@ -105,18 +107,85 @@ ANIMALITOS_DICT = {
 }
 
 
+def inicializar_db():
+  """Inicializa la base de datos SQLite persistente para control de duplicados."""
+  try:
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sent_results (
+                result_id TEXT PRIMARY KEY,
+                fecha TEXT,
+                agencia TEXT,
+                loteria TEXT,
+                hora TEXT,
+                resultado TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    conn.commit()
+    conn.close()
+    logging.info("🗄️ Base de datos SQLite inicializada correctamente.")
+  except Exception as e:
+    logging.error(f"❌ Error inicializando base de datos SQLite: {e}")
+
+
+def verificar_y_registrar_resultado(
+    fecha, agencia, loteria, hora, resultado
+):
+  """Función central atómica para evitar duplicados mediante ID único y SQLite."""
+  f_norm = limpiar_texto(str(fecha)).upper()
+  ag_norm = normalizar_nombre(str(agencia))
+  lot_norm = normalizar_nombre(str(loteria))
+  h_norm = limpiar_texto(str(hora)).upper()
+  res_norm = limpiar_texto(str(resultado)).upper()
+
+  # Construcción del ID único normalizado
+  result_id = f"{f_norm}_{ag_norm}_{lot_norm}_{h_norm}_{res_norm}"
+
+  try:
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    # Operación atómica con INSERT OR IGNORE para prevenir condiciones de carrera
+    cursor.execute(
+        """
+            INSERT OR IGNORE INTO sent_results (result_id, fecha, agencia, loteria, hora, resultado)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (result_id, f_norm, ag_norm, lot_norm, h_norm, res_norm),
+    )
+    conn.commit()
+
+    if cursor.rowcount > 0:
+      logging.info(
+          f"[NEW RESULT] Resultado nuevo detectado y registrado: {lot_norm} |"
+          f" {h_norm} | {res_norm} (ID: {result_id})"
+      )
+      return True
+    else:
+      logging.info(
+          f"[DUPLICATE IGNORED] Resultado duplicado descartado: {lot_norm} |"
+          f" {h_norm} | {res_norm} (ID: {result_id})"
+      )
+      return False
+  except Exception as e:
+    logging.error(f"[RESULT ERROR] Error en base de datos SQLite: {e}")
+    return False
+  finally:
+    if "conn" in locals() and conn:
+      conn.close()
+
+
 def cargar_estado_disco():
-  global horarios_enviados_hoy, primera_ejecucion, ultima_hora_polla, taquilla_activa_hoy, imagen_cashea_file_id, regalos_hoy
+  global primera_ejecucion, ultima_hora_polla, taquilla_activa_hoy, imagen_cashea_file_id, regalos_hoy
   if os.path.exists(STATE_FILE):
     try:
       with open(STATE_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
-        # La imagen de Cashea se carga siempre de forma persistente sin importar el día
         imagen_cashea_file_id = data.get("imagen_cashea", None)
 
         hoy_str = datetime.now().strftime("%Y-%m-%d")
         if data.get("fecha") == hoy_str:
-          horarios_enviados_hoy = set(tuple(x) for x in data.get("enviados", []))
           primera_ejecucion = data.get("primera_ejecucion", False)
           if data.get("ultima_polla_hora"):
             h_data = data.get("ultima_polla_hora")
@@ -126,14 +195,10 @@ def cargar_estado_disco():
             )
           taquilla_activa_hoy = data.get("taquilla_activa", False)
           regalos_hoy = data.get("regalos_hoy", [])
-          logging.info(
-              f"📂 Estado cargado desde disco. Slots bloqueados:"
-              f" {len(horarios_enviados_hoy)}"
-          )
+          logging.info("📂 Estado diario cargado desde disco.")
           return
     except Exception as e:
       logging.warning(f"⚠️ Error cargando estado: {e}")
-  horarios_enviados_hoy = set()
   primera_ejecucion = True
   ultima_hora_polla = None
   taquilla_activa_hoy = False
@@ -147,7 +212,6 @@ def guardar_estado_disco():
     if ultima_hora_polla:
       polla_serializable = [str(ultima_hora_polla[0]), ultima_hora_polla[1]]
 
-    # Asegurar que no se pierda la imagen de cashea existente en disco si la variable temporal está vacía
     existing_cashea = imagen_cashea_file_id
     if not existing_cashea and os.path.exists(STATE_FILE):
       try:
@@ -159,7 +223,6 @@ def guardar_estado_disco():
 
     data = {
         "fecha": hoy_str,
-        "enviados": [list(x) for x in horarios_enviados_hoy],
         "primera_ejecucion": primera_ejecucion,
         "ultima_polla_hora": polla_serializable,
         "taquilla_activa": taquilla_activa_hoy,
@@ -172,6 +235,7 @@ def guardar_estado_disco():
     logging.warning(f"⚠️ Error guardando estado: {e}")
 
 
+inicializar_db()
 cargar_estado_disco()
 
 caption_taquilla = (
@@ -450,7 +514,7 @@ def enviar_telegram_con_botones(mensaje, reply_markup_dict):
   try:
     response = http_session.post(url, json=payload, timeout=10)
     if response.status_code != 200:
-      logging.warning(f"⚠️️ Error al enviar mensaje con botones: {response.text}")
+      logging.warning(f"⚠️ Error al enviar mensaje con botones: {response.text}")
   except Exception as e:
     logging.warning(f"⚠️ Excepción al enviar mensaje con botones: {e}")
 
@@ -494,12 +558,10 @@ def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
 
 
 def limpiar_memoria_diaria():
-  global horarios_enviados_hoy, primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id, ultima_hora_polla, regalos_hoy
-  horarios_enviados_hoy.clear()
+  global primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id, ultima_hora_polla, regalos_hoy
   primera_ejecucion = True
   taquilla_activa_hoy = False
   imagen_taquilla_file_id = None
-  # NOTA: imagen_cashea_file_id NO se limpia aquí para que persista permanentemente entre días
   ultima_hora_polla = None
   regalos_hoy = []
   guardar_estado_disco()
@@ -758,14 +820,13 @@ def enviar_mensaje_cierre():
   )
   taquilla_activa_hoy = False
   imagen_taquilla_file_id = None
-  # NOTA: imagen_cashea_file_id se preserva a propósito para el día siguiente
   ultima_hora_polla = None
   regalos_hoy = []
   guardar_estado_disco()
 
 
 def verificar_resultados():
-  global horarios_enviados_hoy, primera_ejecucion, regalos_hoy
+  global primera_ejecucion, regalos_hoy
   try:
     respuesta = http_session.get(URL_LOTERIA, timeout=15)
     if respuesta.status_code != 200:
@@ -777,7 +838,6 @@ def verificar_resultados():
 
     soup = BeautifulSoup(respuesta.text, "html.parser")
 
-    # Buscar contenedores principales que agrupen las loterías individuales
     tarjetas = soup.find_all(
         ["div", "article", "section"],
         class_=re.compile(r"card|box|item|lotto|result", re.IGNORECASE),
@@ -785,13 +845,13 @@ def verificar_resultados():
     if not tarjetas:
       tarjetas = soup.find_all(["div", "section"])
 
-    nuevos_encontrados = []
+    fecha_actual_str = datetime.now().strftime("%Y-%m-%d")
+    agencia_nombre = "AGENCIA HAROLD JOSÉ"
     procesados_en_esta_corrida = set()
 
     for tarjeta in tarjetas:
       texto_completo_tarjeta = tarjeta.get_text(" ", strip=True).upper()
 
-      # Ignorar por completo la sección de "RESULTADOS DE HOY" o "ÚLTIMOS SALIDOS"
       if (
           "RESULTADOS DE HOY" in texto_completo_tarjeta
           or "ÚLTIMOS SALIDOS" in texto_completo_tarjeta
@@ -799,7 +859,6 @@ def verificar_resultados():
       ):
         continue
 
-      # Intentar extraer el nombre de la lotería estrictamente del bloque actual de forma dinámica
       nombre_loteria = ""
       posibles_titulos = tarjeta.find_all(
           ["h1", "h2", "h3", "h4", "h5", "span", "div", "strong", "b"],
@@ -808,7 +867,6 @@ def verificar_resultados():
 
       for pt in posibles_titulos:
         t_text = limpiar_texto(pt.get_text(" ", strip=True)).upper()
-        # Se agrega 'any(c.isalpha() for c in t_text)' para descartar números puros (como IDs o contadores tipo "100")
         if (
             t_text
             and len(t_text) > 2
@@ -822,7 +880,6 @@ def verificar_resultados():
           nombre_loteria = t_text
           break
 
-      # Si no se encuentra un título seguro dentro del bloque, se ignora en lugar de asumir un nombre incorrecto
       if not nombre_loteria or len(nombre_loteria) > 40:
         continue
 
@@ -832,7 +889,6 @@ def verificar_resultados():
       if not nombre_loteria:
         continue
 
-      # Buscar los slots o elementos de sorteo dentro de ESTE bloque exclusivamente
       slots_sorteo = tarjeta.find_all(
           ["div", "li", "span", "tr"],
           class_=re.compile(r"item|slot|draw|row|col", re.IGNORECASE),
@@ -860,78 +916,88 @@ def verificar_resultados():
         resultado_final = limpiar_texto(match_res.group(1)).upper()
 
         clave_slot = (normalizar_nombre(nombre_loteria), hora)
-
         if clave_slot in procesados_en_esta_corrida:
           continue
         procesados_en_esta_corrida.add(clave_slot)
 
         if primera_ejecucion:
-          horarios_enviados_hoy.add(clave_slot)
+          # Registro inicial para evitar spam de resultados pasados al arrancar
+          verificar_y_registrar_resultado(
+              fecha_actual_str,
+              agencia_nombre,
+              nombre_loteria,
+              hora,
+              resultado_final,
+          )
         else:
-          if clave_slot not in horarios_enviados_hoy:
-            item_dict = {
-                "loteria": nombre_loteria,
-                "hora": hora,
-                "resultado": resultado_final,
-            }
-            if item_dict not in nuevos_encontrados:
-              nuevos_encontrados.append(item_dict)
-              horarios_enviados_hoy.add(clave_slot)
-              guardar_estado_disco()
+          # Verificación y registro atómico centralizado
+          if verificar_y_registrar_resultado(
+              fecha_actual_str,
+              agencia_nombre,
+              nombre_loteria,
+              hora,
+              resultado_final,
+          ):
+            markup_wa = InlineKeyboardMarkup()
+            markup_wa.add(
+                InlineKeyboardButton(
+                    "📲 ESCRIBENOS AL WHATSAPP", url="https://wa.me/584124489363"
+                )
+            )
+            markup_dict = markup_wa.to_dict()
+
+            mensaje_res = (
+                "🎯 AGENCIA HAROLD JOSÉ 🎯\n"
+                "•••••••••••••••••••••••••••••••••••\n"
+                f"🎰 {nombre_loteria}\n"
+                f"🕒 {hora}  {resultado_final}\n"
+                "•••••••••••••••••••••••••••••••••••\n"
+                "📲 WHATSAPP: 04124489363"
+            )
+            try:
+              enviar_telegram_con_botones(mensaje_res, markup_dict)
               logging.info(
-                  f"✨ Nuevo resultado detectado: {nombre_loteria} - {hora} -"
-                  f" {resultado_final}"
+                  f"[RESULT SENT] Resultado enviado a Telegram: {nombre_loteria}"
+                  f" | {hora} | {resultado_final}"
               )
+            except Exception as e:
+              logging.error(f"[RESULT ERROR] Error enviando a Telegram: {e}")
+
+            time.sleep(2)
+
+            num_match = re.search(r"^(\d{1,2})", resultado_final)
+            if num_match and regalos_hoy:
+              num_limpio = num_match.group(1)
+              for r_num, r_animal in regalos_hoy:
+                if (
+                    num_limpio.lstrip("0") == r_num.lstrip("0")
+                    or num_limpio == r_num
+                ):
+                  mensaje_acierto = (
+                      "🎉🎉 ¡ACERTAMOS! 🎉🎉\n\n✅ 🎁 Regalo del Día\n\n"
+                      f"🎯 {resultado_final}\n"
+                      f"🎲 🎰 {nombre_loteria}\n"
+                      f"🕒 {hora}\n\n📲 WHATSAPP: 04124489363\n\n🍀"
+                      " ¡Felicidades a todos los que confiaron en Agencia Harold"
+                      " José!"
+                  )
+                  try:
+                    enviar_telegram_con_botones(mensaje_acierto, markup_dict)
+                    logging.info(
+                        "[RESULT SENT] Mensaje de acierto enviado a Telegram:"
+                        f" {nombre_loteria} | {hora}"
+                    )
+                  except Exception as e:
+                    logging.error(f"[RESULT ERROR] Error enviando acierto: {e}")
+                  time.sleep(2)
+                  break
 
     if primera_ejecucion:
       primera_ejecucion = False
       guardar_estado_disco()
       logging.info(
-          "✅ Sincronización inicial completada. Slots bloqueados en memoria:"
-          f" {len(horarios_enviados_hoy)}"
+          "✅ Sincronización inicial completada con base de datos SQLite."
       )
-      return
-
-    if nuevos_encontrados:
-      markup_wa = InlineKeyboardMarkup()
-      markup_wa.add(
-          InlineKeyboardButton(
-              "📲 ESCRIBENOS AL WHATSAPP", url="https://wa.me/584124489363"
-          )
-      )
-      markup_dict = markup_wa.to_dict()
-
-      for item_nuevo in nuevos_encontrados:
-        mensaje_res = (
-            "🎯 AGENCIA HAROLD JOSÉ 🎯\n"
-            "•••••••••••••••••••••••••••••••••••\n"
-            f"🎰 {item_nuevo['loteria']}\n"
-            f"🕒 {item_nuevo['hora']}  {item_nuevo['resultado']}\n"
-            "•••••••••••••••••••••••••••••••••••\n"
-            "📲 WHATSAPP: 04124489363"
-        )
-        enviar_telegram_con_botones(mensaje_res, markup_dict)
-        time.sleep(2)
-
-        num_match = re.search(r"^(\d{1,2})", item_nuevo["resultado"])
-        if num_match and regalos_hoy:
-          num_limpio = num_match.group(1)
-          for r_num, r_animal in regalos_hoy:
-            if (
-                num_limpio.lstrip("0") == r_num.lstrip("0")
-                or num_limpio == r_num
-            ):
-              mensaje_acierto = (
-                  "🎉🎉 ¡ACERTAMOS! 🎉🎉\n\n✅ 🎁 Regalo del Día\n\n"
-                  f"🎯 {item_nuevo['resultado']}\n"
-                  f"🎲 🎰 {item_nuevo['loteria']}\n"
-                  f"🕒 {item_nuevo['hora']}\n\n📲 WHATSAPP: 04124489363\n\n🍀"
-                  " ¡Felicidades a todos los que confiaron en Agencia Harold"
-                  " José!"
-              )
-              enviar_telegram_con_botones(mensaje_acierto, markup_dict)
-              time.sleep(2)
-              break
 
   except Exception as e:
     logging.error(f"⚠️ Error detallado en verificación de resultados: {e}")
@@ -1031,7 +1097,6 @@ def iniciar_scheduler():
   scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=15, minute=0)
   scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=18, minute=0)
 
-  # Horario actualizado de Cashea: Cada hora de 9 AM a 4 PM, y el último aviso a las 4:30 PM
   scheduler.add_job(enviar_anuncio_cashea, "cron", hour="9-16", minute=0)
   scheduler.add_job(enviar_anuncio_cashea, "cron", hour=16, minute=30)
 
@@ -1066,7 +1131,6 @@ if __name__ == "__main__":
     t_schedule.daemon = True
     t_schedule.start()
 
-    # Configurar webhook al iniciar
     configurar_webhook()
 
     port = int(os.environ.get("PORT", 5000))
