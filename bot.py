@@ -15,28 +15,28 @@ import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 import urllib3
 
-# Configuración de logging profesional para Render[cite: 5]
+# Configuración de logging profesional para Render
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler()],
 )
 
-# Forzar la zona horaria de Venezuela de forma segura[cite: 5]
+# Forzar la zona horaria de Venezuela de forma segura
 os.environ["TZ"] = "America/Caracas"
 try:
   time.tzset()
 except Exception as e:
   logging.warning(f"⚠️ Nota sobre tzset: {e}")
 
-# Desactivar advertencias de certificados SSL[cite: 5]
+# Desactivar advertencias de certificados SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Credenciales y canal principal configurado[cite: 5]
+# Credenciales y canal principal configurado
 TOKEN = os.environ.get(
     "TELEGRAM_TOKEN", "8728747633:AAHakMFznhlpK6QbkZinctgbl131wE2hIeI"
 )
-CANAL = "@resultadosagharoldjose"  # Canal oficial de producción indicado[cite: 5]
+CANAL = "@resultadosagharoldjose"  # Canal oficial de producción indicado
 ENLACE_CANAL = "https://t.me/resultadosagharoldjose"
 ENLACE_POLLAS = "https://t.me/pollasydupletas"
 
@@ -48,13 +48,13 @@ URL_RULETA_ACTIVA = "https://www.ruletactiva.com.ve"
 URL_BCV = "https://www.bcv.org.ve/"
 STATE_FILE = "bot_state.json"
 
-# Sesión HTTP optimizada para reuso de conexiones[cite: 5]
+# Sesión HTTP optimizada para reuso de conexiones
 http_session = requests.Session()
 http_session.headers.update(
     {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
 )
 
-# Control estricto anti-duplicados y memoria[cite: 5]
+# Control estricto anti-duplicados y memoria
 horarios_enviados_hoy = set()
 primera_ejecucion = True
 ultima_hora_polla = None
@@ -64,9 +64,7 @@ imagen_taquilla_file_id = None
 imagen_cashea_file_id = None
 regalos_hoy = []
 tripleta_enviada_hoy = False
-resultados_por_sorteo = (
-    {}
-)  # {(loteria, hora): set(nums)} para control de tripleta
+resultados_por_sorteo = {}  # {(loteria, hora): set(nums)} para control de tripleta
 
 ANIMALITOS_DICT = {
     "0": "Delfín",
@@ -854,7 +852,6 @@ def verificar_resultados():
         ):
           continue
 
-        # Omitir procesamiento normal aquí si es Ruleta Activa para manejarla de manera especial
         if "RULETA ACTIVA" in texto_completo_tarjeta:
           continue
 
@@ -915,7 +912,6 @@ def verificar_resultados():
           resultado_final = limpiar_texto(match_res.group(1)).upper()
           clave_slot = (normalizar_nombre(nombre_loteria), hora)
 
-          # Registrar número en el sorteo para control de tripleta
           num_m = re.search(r"^(\d{1,2})", resultado_final)
           if num_m:
             if clave_slot not in resultados_por_sorteo:
@@ -991,7 +987,6 @@ def verificar_resultados():
                 nombre_loteria_ra = "RULETA ACTIVA"
                 clave_slot_ra = (normalizar_nombre(nombre_loteria_ra), hora_ra)
 
-                # Registrar todas las posiciones (A, B, C, D) en el sorteo para la tripleta
                 if clave_slot_ra not in resultados_por_sorteo:
                   resultados_por_sorteo[clave_slot_ra] = set()
                 for let, val in posiciones.items():
@@ -1059,7 +1054,6 @@ def verificar_resultados():
           enviar_telegram_con_botones(mensaje_res, markup_dict)
           time.sleep(2)
 
-          # Verificación de acierto de regalo individual
           num_match = re.search(r"^(\d{1,2})", item_nuevo["resultado"])
           if num_match and regalos_hoy:
             num_limpio = num_match.group(1)
@@ -1080,7 +1074,6 @@ def verificar_resultados():
                 time.sleep(2)
                 break
 
-          # Verificación de Tripleta Completada en el mismo sorteo
           verificar_y_enviar_tripleta(
               item_nuevo["loteria"], item_nuevo["hora"]
           )
@@ -1213,9 +1206,30 @@ def configurar_webhook():
 if __name__ == "__main__":
   try:
     logging.info("🚀 Iniciando aplicación principal...")
-    t_schedule = Thread(target=iniciar_scheduler)
-    t_schedule.daemon = True
-    t_schedule.start()
+
+    # Mecanismo de bloqueo para evitar duplicación del scheduler en múltiples workers
+    iniciar_hilo = True
+    lock_path = "scheduler_run.lock"
+    try:
+      lock_file = open(lock_path, "w")
+      if os.name != "nt":
+        import fcntl
+
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except Exception:
+      iniciar_hilo = (
+          False  # Otro proceso/worker ya está ejecutando el scheduler
+      )
+
+    if iniciar_hilo:
+      t_schedule = Thread(target=iniciar_scheduler)
+      t_schedule.daemon = True
+      t_schedule.start()
+      logging.info("⚙️ BackgroundScheduler iniciado en este proceso principal.")
+    else:
+      logging.info(
+          "ℹ️ Scheduler omitido en este worker secundario para prevenir spam."
+      )
 
     configurar_webhook()
 
