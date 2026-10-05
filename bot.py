@@ -13,13 +13,7 @@ from flask import Flask, request
 import requests
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
-
-urllib3 = None
-try:
-  import urllib3
-  urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-except Exception:
-  pass
+import urllib3
 
 # Configuración de logging profesional para Render
 logging.basicConfig(
@@ -35,6 +29,9 @@ try:
 except Exception as e:
   logging.warning(f"⚠️ Nota sobre tzset: {e}")
 
+# Desactivar advertencias de certificados SSL
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 # Credenciales y canal principal configurado
 TOKEN = os.environ.get(
     "TELEGRAM_TOKEN", "8728747633:AAHakMFznhlpK6QbkZinctgbl131wE2hIeI"
@@ -47,7 +44,6 @@ bot = telebot.TeleBot(TOKEN)
 scheduler = BackgroundScheduler(timezone="America/Caracas")
 
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
-URL_RULETA_ACTIVA = "https://www.ruletactiva.com.ve"
 URL_BCV = "https://www.bcv.org.ve/"
 STATE_FILE = "bot_state.json"
 
@@ -57,6 +53,8 @@ http_session.headers.update(
     {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
 )
 
+# Control estricto anti-duplicados y memoria
+horarios_enviados_hoy = set()
 primera_ejecucion = True
 ultima_hora_polla = None
 
@@ -64,8 +62,6 @@ taquilla_activa_hoy = False
 imagen_taquilla_file_id = None
 imagen_cashea_file_id = None
 regalos_hoy = []
-tripleta_enviada_hoy = False
-resultados_por_sorteo = {}  # {(loteria, hora): set(nums)} para control de tripleta
 
 ANIMALITOS_DICT = {
     "0": "Delfín",
@@ -109,25 +105,18 @@ ANIMALITOS_DICT = {
 }
 
 
-def normalizar_num(num_str):
-  s = str(num_str).strip()
-  if s == "00":
-    return "00"
-  if s == "0":
-    return "0"
-  return str(int(s)) if s.isdigit() else s
-
-
 def cargar_estado_disco():
-  global primera_ejecucion, ultima_hora_polla, taquilla_activa_hoy, imagen_cashea_file_id, regalos_hoy, tripleta_enviada_hoy, resultados_por_sorteo
+  global horarios_enviados_hoy, primera_ejecucion, ultima_hora_polla, taquilla_activa_hoy, imagen_cashea_file_id, regalos_hoy
   if os.path.exists(STATE_FILE):
     try:
       with open(STATE_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
+        # La imagen de Cashea se carga siempre de forma persistente sin importar el día
         imagen_cashea_file_id = data.get("imagen_cashea", None)
 
         hoy_str = datetime.now().strftime("%Y-%m-%d")
         if data.get("fecha") == hoy_str:
+          horarios_enviados_hoy = set(tuple(x) for x in data.get("enviados", []))
           primera_ejecucion = data.get("primera_ejecucion", False)
           if data.get("ultima_polla_hora"):
             h_data = data.get("ultima_polla_hora")
@@ -137,17 +126,18 @@ def cargar_estado_disco():
             )
           taquilla_activa_hoy = data.get("taquilla_activa", False)
           regalos_hoy = data.get("regalos_hoy", [])
-          tripleta_enviada_hoy = data.get("tripleta_enviada", False)
-          logging.info("📂 Estado cargado desde disco correctamente.")
+          logging.info(
+              f"📂 Estado cargado desde disco. Slots bloqueados:"
+              f" {len(horarios_enviados_hoy)}"
+          )
           return
     except Exception as e:
       logging.warning(f"⚠️ Error cargando estado: {e}")
+  horarios_enviados_hoy = set()
   primera_ejecucion = True
   ultima_hora_polla = None
   taquilla_activa_hoy = False
   regalos_hoy = []
-  tripleta_enviada_hoy = False
-  resultados_por_sorteo = {}
 
 
 def guardar_estado_disco():
@@ -157,6 +147,7 @@ def guardar_estado_disco():
     if ultima_hora_polla:
       polla_serializable = [str(ultima_hora_polla[0]), ultima_hora_polla[1]]
 
+    # Asegurar que no se pierda la imagen de cashea existente en disco si la variable temporal está vacía
     existing_cashea = imagen_cashea_file_id
     if not existing_cashea and os.path.exists(STATE_FILE):
       try:
@@ -166,60 +157,19 @@ def guardar_estado_disco():
       except Exception:
         pass
 
-    data = {}
-    if os.path.exists(STATE_FILE):
-      try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-          data = json.load(f)
-      except Exception:
-        pass
-
-    data.update({
+    data = {
         "fecha": hoy_str,
+        "enviados": [list(x) for x in horarios_enviados_hoy],
         "primera_ejecucion": primera_ejecucion,
         "ultima_polla_hora": polla_serializable,
         "taquilla_activa": taquilla_activa_hoy,
         "imagen_cashea": existing_cashea,
         "regalos_hoy": regalos_hoy,
-        "tripleta_enviada": tripleta_enviada_hoy,
-    })
-    if "enviados" not in data:
-      data["enviados"] = []
-
+    }
     with open(STATE_FILE, "w", encoding="utf-8") as f:
       json.dump(data, f, ensure_ascii=False, indent=2)
   except Exception as e:
     logging.warning(f"⚠️ Error guardando estado: {e}")
-
-
-def slot_ya_enviado_o_marcar(clave_slot_str):
-  """Control de envíos único por día/slot guardado en disco"""
-  try:
-    hoy_str = datetime.now().strftime("%Y-%m-%d")
-    data = {"fecha": hoy_str, "enviados": [], "primera_ejecucion": primera_ejecucion}
-    if os.path.exists(STATE_FILE):
-      try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-          loaded = json.load(f)
-          if loaded.get("fecha") == hoy_str:
-            data = loaded
-      except Exception:
-        pass
-
-    enviados = data.get("enviados", [])
-    if clave_slot_str in enviados:
-      return True  # Ya fue enviado
-
-    enviados.append(clave_slot_str)
-    data["enviados"] = enviados
-    data["fecha"] = hoy_str
-
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-      json.dump(data, f, ensure_ascii=False, indent=2)
-    return False  # Nuevo, proceder a enviar
-  except Exception as e:
-    logging.error(f"Error en slot_ya_enviado_o_marcar: {e}")
-    return False
 
 
 cargar_estado_disco()
@@ -357,10 +307,25 @@ def home():
       f"¡El bot de resultados de la AGENCIA HAROLD JOSÉ está activo en el canal"
       f" oficial {CANAL}!<br><br><b>Estado del aviso de taquilla de hoy:</b>"
       f" {estado_tag}<br><b>Estado de la imagen de Cashea:</b>"
-      f" {cashea_tag}"
+      f" {cashea_tag}<br><br><b>Enlaces de prueba rápida (Test de cada"
+      " opción):</b><br>👉 <a href='/test/madrugada'>Probar Saludo de Madrugada"
+      " (6:30 AM)</a><br>👉 <a href='/test/piramide'>Probar Pirámide Numérica"
+      " con Sumas por Fila (6:31 AM)</a><br>👉 <a href='/test/regalos'>Probar"
+      " Regalos de la Agencia (6:45 AM)</a><br>👉 <a href='/test/saludo'>Probar"
+      " Saludo Matutino (7:00 AM)</a><br>👉 <a href='/test/publicidad'>Probar"
+      " Aviso Publicitario (7am/3pm/6pm)</a><br>👉 <a"
+      " href='/test/cashea'>Probar Aviso con Botones Cashea (9am a 4:30"
+      " pm)</a><br>👉 <a href='/test/tiempocumplido'>Probar Tiempo Cumplido"
+      " (Minuto 55)</a><br>👉 <a href='/test/bcv'>Probar Tasa Oficial"
+      " BCV</a><br>👉 <a href='/test/taquilla_manual'>Probar Envío Manual de"
+      " Taquilla Activa</a><br>👉 <a href='/test/pollas'>Probar Aviso de Pollas"
+      " (Minuto 10)</a><br>👉 <a href='/test/resultados'>Forzar Revisión de"
+      " Resultados Individuales</a><br>👉 <a href='/test/cierre'>Probar Mensaje"
+      " de Cierre (9:10 PM)</a>"
   )
 
 
+# --- RUTAS DE WEBHOOK DE TELEGRAM ---
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
   if request.headers.get("content-type") == "application/json":
@@ -385,7 +350,7 @@ def test_piramide():
 
 @app.route("/test/regalos")
 def test_regalos():
-  enviar_regalos_agencia_handler()
+  enviar_regalos_agencia()
   return "Prueba de Regalos de la Agencia ejecutada."
 
 
@@ -428,7 +393,7 @@ def test_taquilla_manual():
     enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
   else:
     enviar_telegram(caption_taquilla, disable_web_preview=True)
-  return "Prueba de Taquilla Activa ejecutada."
+  return "Prueba de Taquilla Activa ejecutada (y estado marcado como activado)."
 
 
 @app.route("/test/pollas")
@@ -485,7 +450,7 @@ def enviar_telegram_con_botones(mensaje, reply_markup_dict):
   try:
     response = http_session.post(url, json=payload, timeout=10)
     if response.status_code != 200:
-      logging.warning(f"⚠️ Error al enviar mensaje con botones: {response.text}")
+      logging.warning(f"⚠️️ Error al enviar mensaje con botones: {response.text}")
   except Exception as e:
     logging.warning(f"⚠️ Excepción al enviar mensaje con botones: {e}")
 
@@ -503,7 +468,9 @@ def enviar_telegram_foto(photo_id, caption):
     if response.status_code != 200:
       logging.warning(f"⚠️ Error al enviar foto al canal: {response.text}")
   except Exception as e:
-    logging.warning(f"⚠️ Excepción al enviar foto: {e}")
+    logging.warning(
+        f"⚠️ Excepción de conexión con Telegram al enviar foto: {e}"
+    )
 
 
 def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
@@ -519,28 +486,29 @@ def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
   try:
     response = http_session.post(url, json=payload, timeout=10)
     if response.status_code != 200:
-      logging.warning(f"⚠️ Error al enviar foto con botones: {response.text}")
+      logging.warning(
+          f"⚠️ Error al enviar foto con botones al canal: {response.text}"
+      )
   except Exception as e:
     logging.warning(f"⚠️ Excepción al enviar foto con botones: {e}")
 
 
 def limpiar_memoria_diaria():
-  global primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id, ultima_hora_polla, regalos_hoy, tripleta_enviada_hoy, resultados_por_sorteo
+  global horarios_enviados_hoy, primera_ejecucion, taquilla_activa_hoy, imagen_taquilla_file_id, ultima_hora_polla, regalos_hoy
+  horarios_enviados_hoy.clear()
   primera_ejecucion = True
   taquilla_activa_hoy = False
   imagen_taquilla_file_id = None
+  # NOTA: imagen_cashea_file_id NO se limpia aquí para que persista permanentemente entre días
   ultima_hora_polla = None
   regalos_hoy = []
-  tripleta_enviada_hoy = False
-  resultados_por_sorteo = {}
   guardar_estado_disco()
-  logging.info("🧹 Memoria diaria limpiada.")
+  logging.info(
+      "🧹 Memoria diaria limpiada. La imagen de Cashea se mantiene guardada."
+  )
 
 
 def enviar_saludo_madrugada():
-  hoy_str = datetime.now().strftime("%Y-%m-%d")
-  if slot_ya_enviado_o_marcar(f"saludo_madrugada_{hoy_str}"):
-    return
   enviar_telegram(
       "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n🌅 ¡Despertando con la mejor energía y"
       " listos para ganar! 🌅\n\nComenzamos este nuevo día activos y"
@@ -623,13 +591,10 @@ def generar_piramide():
 
 
 def enviar_piramide_diaria():
-  hoy_str = datetime.now().strftime("%Y-%m-%d")
-  if slot_ya_enviado_o_marcar(f"piramide_diaria_{hoy_str}"):
-    return
   enviar_telegram(generar_piramide(), disable_web_preview=True)
 
 
-def enviar_regalos_agencia():
+def generar_regalos_agencia():
   global regalos_hoy
   ahora = datetime.now()
   fecha_str = ahora.strftime("%d/%m/%Y")
@@ -667,17 +632,11 @@ def enviar_regalos_agencia():
   )
 
 
-def enviar_regalos_agencia_handler():
-  hoy_str = datetime.now().strftime("%Y-%m-%d")
-  if slot_ya_enviado_o_marcar(f"regalos_agencia_{hoy_str}"):
-    return
-  enviar_telegram(enviar_regalos_agencia(), disable_web_preview=True)
+def enviar_regalos_agencia():
+  enviar_telegram(generar_regalos_agencia(), disable_web_preview=True)
 
 
 def enviar_saludo_matutino():
-  hoy_str = datetime.now().strftime("%Y-%m-%d")
-  if slot_ya_enviado_o_marcar(f"saludo_matutino_{hoy_str}"):
-    return
   enviar_telegram(
       "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n🌅 ¡Buenos días a todos! 🌅\n\nYa arrancamos"
       " un nuevo día con la mejor energía. Estaremos compartiendo todos los"
@@ -693,22 +652,11 @@ def enviar_saludo_matutino():
 
 
 def enviar_anuncio_publicitario():
-  ahora = datetime.now()
-  hoy_str = ahora.strftime("%Y-%m-%d")
-  if slot_ya_enviado_o_marcar(f"anuncio_publicitario_{ahora.hour}_{hoy_str}"):
-    return
   enviar_telegram(TEXTO_PUBLICITARIO, disable_web_preview=True)
 
 
 def enviar_anuncio_cashea():
   global imagen_cashea_file_id
-  ahora = datetime.now()
-  hoy_str = ahora.strftime("%Y-%m-%d")
-  if slot_ya_enviado_o_marcar(
-      f"anuncio_cashea_{ahora.hour}_{ahora.minute}_{hoy_str}"
-  ):
-    return
-
   markup = InlineKeyboardMarkup()
   url_jugar = "https://wa.me/584124489363?text=Hola%2C%20quiero%20jugar%20con%20Cashea%20en%20Agencia%20Harold%20Jos%C3%A9."
   url_consultar = "https://wa.me/584124489363?text=Hola%2C%20quiero%20consultar%20mis%20cuotas%20de%20Cashea%20en%20Agencia%20Harold%20Jos%C3%A9."
@@ -728,13 +676,6 @@ def enviar_anuncio_cashea():
 
 
 def enviar_aviso_tiempo_cumplido():
-  ahora = datetime.now()
-  hoy_str = ahora.strftime("%Y-%m-%d")
-  if slot_ya_enviado_o_marcar(
-      f"tiempo_cumplido_{ahora.hour}_{ahora.minute}_{hoy_str}"
-  ):
-    return
-
   enviar_telegram(
       "⏰ ¡Tiempo cumplido! Han finalizado las jugadas para este sorteo en la"
       " AGENCIA HAROLD JOSÉ. ¡Muy atentos a los resultados y que la suerte esté"
@@ -744,12 +685,6 @@ def enviar_aviso_tiempo_cumplido():
 
 
 def enviar_tasa_dolar():
-  ahora = datetime.now()
-  hoy_str = ahora.strftime("%Y-%m-%d")
-  turno = "AM" if ahora.hour < 12 else "PM"
-  if slot_ya_enviado_o_marcar(f"tasa_dolar_{turno}_{hoy_str}"):
-    return
-
   try:
     response = http_session.get(URL_BCV, timeout=15, verify=False)
     precio_dolar = "756,71"
@@ -780,10 +715,6 @@ def enviar_tasa_dolar():
 
 def tarea_envio_programado_taquilla():
   global taquilla_activa_hoy, imagen_taquilla_file_id
-  hoy_str = datetime.now().strftime("%Y-%m-%d")
-  if slot_ya_enviado_o_marcar(f"taquilla_1500_{hoy_str}"):
-    return
-
   if taquilla_activa_hoy:
     if imagen_taquilla_file_id:
       enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
@@ -791,37 +722,34 @@ def tarea_envio_programado_taquilla():
     else:
       enviar_telegram(caption_taquilla, disable_web_preview=True)
       logging.info("✅ Taquilla activa reenviada por texto a las 3:00 PM.")
+  else:
+    logging.info(
+        "ℹ️ A las 3:00 PM la taquilla no fue activada en la mañana, se omite el"
+        " envío."
+    )
 
 
 def tarea_minuto_diez():
   global ultima_hora_polla
   ahora = datetime.now()
-  hoy_str = ahora.strftime("%Y-%m-%d")
   if (
       (ahora.hour == 7 and ahora.minute >= 10)
       or (7 < ahora.hour < 17)
       or (ahora.hour == 17 and ahora.minute == 0)
   ):
     clave_hora = (ahora.date(), ahora.hour)
-    slot_id = f"polla_{ahora.hour}_{hoy_str}"
     if ultima_hora_polla != clave_hora:
-      if slot_ya_enviado_o_marcar(slot_id):
-        return
       ultima_hora_polla = clave_hora
       guardar_estado_disco()
       enviar_telegram(
           "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n📢 ¡Pollas actualizadas!\nPuedes verlas"
-          f" aquí 👇🏻\n{ENLACE_POLLAS}\n\n¡Mucho éxito! 🍀",
+          f" hier 👇🏻\n{ENLACE_POLLAS}\n\n¡Mucho éxito! 🍀",
           disable_web_preview=False,
       )
 
 
 def enviar_mensaje_cierre():
-  global taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id, ultima_hora_polla, regalos_hoy, tripleta_enviada_hoy, resultados_por_sorteo
-  hoy_str = datetime.now().strftime("%Y-%m-%d")
-  if slot_ya_enviado_o_marcar(f"cierre_jornada_{hoy_str}"):
-    return
-
+  global taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id, ultima_hora_polla, regalos_hoy
   enviar_telegram(
       "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n🌙 ¡FINAL DE JORNADA! 🌙\n\nEstos fueron"
       " todos los resultados del día de hoy. ¡Gracias por jugar con nosotros!"
@@ -830,309 +758,180 @@ def enviar_mensaje_cierre():
   )
   taquilla_activa_hoy = False
   imagen_taquilla_file_id = None
+  # NOTA: imagen_cashea_file_id se preserva a propósito para el día siguiente
   ultima_hora_polla = None
   regalos_hoy = []
-  tripleta_enviada_hoy = False
-  resultados_por_sorteo = {}
   guardar_estado_disco()
 
 
-def verificar_y_enviar_tripleta(loteria_nombre, hora_sorteo):
-  global tripleta_enviada_hoy, regalos_hoy, resultados_por_sorteo
-  if tripleta_enviada_hoy or not regalos_hoy or len(regalos_hoy) < 3:
-    return
-
-  clave_slot = (normalizar_nombre(loteria_nombre), hora_sorteo)
-  if clave_slot not in resultados_por_sorteo:
-    return
-
-  regalos_norm = {normalizar_num(r[0]) for r in regalos_hoy}
-  sorteo_norm = resultados_por_sorteo[clave_slot]
-
-  if regalos_norm.issubset(sorteo_norm):
-    hoy_str = datetime.now().strftime("%Y-%m-%d")
-    if slot_ya_enviado_o_marcar(f"tripleta_{hoy_str}"):
+def verificar_resultados():
+  global horarios_enviados_hoy, primera_ejecucion, regalos_hoy
+  try:
+    respuesta = http_session.get(URL_LOTERIA, timeout=15)
+    if respuesta.status_code != 200:
+      logging.warning(
+          "⚠️ Error al conectar con la web de lotería:"
+          f" {respuesta.status_code}"
+      )
       return
 
-    tripleta_enviada_hoy = True
-    guardar_estado_disco()
+    soup = BeautifulSoup(respuesta.text, "html.parser")
 
-    r1 = f"{regalos_hoy[0][0]} - {regalos_hoy[0][1]}"
-    r2 = f"{regalos_hoy[1][0]} - {regalos_hoy[1][1]}"
-    r3 = f"{regalos_hoy[2][0]} - {regalos_hoy[2][1]}"
-
-    mensaje_tripleta = (
-        "🎉🎁 ¡ACERTAMOS LOS REGALOS DEL DÍA! 🎁🎉\n\n"
-        "🔥 ¡TRIPLETA COMPLETADA! 🔥\n\n"
-        f"🎯 Los 3 regalos salieron en una sola lotería ({loteria_nombre} -"
-        f" {hora_sorteo}):\n\n"
-        f"⭐ {r1}\n"
-        f"⭐ {r2}\n"
-        f"⭐ {r3}\n\n"
-        "🏆 ¡TRIPLETA COMPLETADA!\n\n"
-        "🍀 ¡Felicidades a todos los que confiaron en Agencia Harold José!\n\n"
-        "📲 WHATSAPP: 04124489363"
+    # Buscar contenedores principales que agrupen las loterías individuales
+    tarjetas = soup.find_all(
+        ["div", "article", "section"],
+        class_=re.compile(r"card|box|item|lotto|result", re.IGNORECASE),
     )
-    markup_wa = InlineKeyboardMarkup()
-    markup_wa.add(
-        InlineKeyboardButton(
-            "📲 ESCRIBENOS AL WHATSAPP", url="https://wa.me/584124489363"
-        )
-    )
-    enviar_telegram_con_botones(mensaje_tripleta, markup_wa.to_dict())
-    logging.info(
-        f"🏆 ¡Tripleta completada detectada y enviada! Lotería:"
-        f" {loteria_nombre} - {hora_sorteo}"
-    )
+    if not tarjetas:
+      tarjetas = soup.find_all(["div", "section"])
 
+    nuevos_encontrados = []
+    procesados_en_esta_corrida = set()
 
-def verificar_resultados():
-  global primera_ejecucion, regalos_hoy, resultados_por_sorteo
-  try:
-    # 1. PROCESAR LOTERÍAS NORMALES DESDE WINBIG
-    respuesta = http_session.get(URL_LOTERIA, timeout=15)
-    if respuesta.status_code == 200:
-      soup = BeautifulSoup(respuesta.text, "html.parser")
-      tarjetas = soup.find_all(
-          ["div", "article", "section"],
-          class_=re.compile(r"card|box|item|lotto|result", re.IGNORECASE),
+    for tarjeta in tarjetas:
+      texto_completo_tarjeta = tarjeta.get_text(" ", strip=True).upper()
+
+      # Ignorar por completo la sección de "RESULTADOS DE HOY" o "ÚLTIMOS SALIDOS"
+      if (
+          "RESULTADOS DE HOY" in texto_completo_tarjeta
+          or "ÚLTIMOS SALIDOS" in texto_completo_tarjeta
+          or "ULTIMOS SALIDOS" in texto_completo_tarjeta
+      ):
+        continue
+
+      # Intentar extraer el nombre de la lotería estrictamente del bloque actual de forma dinámica
+      nombre_loteria = ""
+      posibles_titulos = tarjeta.find_all(
+          ["h1", "h2", "h3", "h4", "h5", "span", "div", "strong", "b"],
+          class_=re.compile(r"title|header|name|lotto|text", re.IGNORECASE),
       )
-      if not tarjetas:
-        tarjetas = soup.find_all(["div", "section"])
 
-      nuevos_encontrados = []
-      procesados_en_esta_corrida = set()
-
-      for tarjeta in tarjetas:
-        texto_completo_tarjeta = tarjeta.get_text(" ", strip=True).upper()
-
+      for pt in posibles_titulos:
+        t_text = limpiar_texto(pt.get_text(" ", strip=True)).upper()
+        # Se agrega 'any(c.isalpha() for c in t_text)' para descartar números puros (como IDs o contadores tipo "100")
         if (
-            "RESULTADOS DE HOY" in texto_completo_tarjeta
-            or "ÚLTIMOS SALIDOS" in texto_completo_tarjeta
-            or "ULTIMOS SALIDOS" in texto_completo_tarjeta
+            t_text
+            and len(t_text) > 2
+            and any(c.isalpha() for c in t_text)
+            and not re.search(r"\d{1,2}:\d{2}", t_text)
+            and "PENDIENTE" not in t_text
+            and "RESULTADOS" not in t_text
+            and "WINBIG" not in t_text
+            and "HOY" not in t_text
         ):
-          continue
-
-        if "RULETA ACTIVA" in texto_completo_tarjeta:
-          continue
-
-        nombre_loteria = ""
-        posibles_titulos = tarjeta.find_all(
-            ["h1", "h2", "h3", "h4", "h5", "span", "div", "strong", "b"],
-            class_=re.compile(r"title|header|name|lotto|text", re.IGNORECASE),
-        )
-
-        for pt in posibles_titulos:
-          t_text = limpiar_texto(pt.get_text(" ", strip=True)).upper()
-          if (
-              t_text
-              and len(t_text) > 2
-              and any(c.isalpha() for c in t_text)
-              and not re.search(r"\d{1,2}:\d{2}", t_text)
-              and "PENDIENTE" not in t_text
-              and "RESULTADOS" not in t_text
-              and "WINBIG" not in t_text
-              and "HOY" not in t_text
-          ):
-            nombre_loteria = t_text
-            break
-
-        if not nombre_loteria or len(nombre_loteria) > 40:
-          continue
-
-        nombre_loteria = limpiar_texto(
-            re.sub(r"^[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+", "", nombre_loteria)
-        ).upper()
-        if not nombre_loteria:
-          continue
-
-        slots_sorteo = tarjeta.find_all(
-            ["div", "li", "span", "tr"],
-            class_=re.compile(r"item|slot|draw|row|col", re.IGNORECASE),
-        )
-        if not slots_sorteo:
-          slots_sorteo = [tarjeta]
-
-        for slot in slots_sorteo:
-          texto_slot = limpiar_texto(slot.get_text(" ", strip=True)).upper()
-          if "PENDIENTE" in texto_slot:
-            continue
-
-          match_h = re.search(r"(\d{1,2}:\d{2}\s*(?:AM|PM))", texto_slot)
-          if not match_h:
-            continue
-          hora = limpiar_texto(match_h.group(1)).upper()
-
-          match_res = re.search(
-              r"(\d{1,2}\s-\s[A-ZÁÉÍÓÚÑa-zñáéíóú]+(?:\s+[A-ZÁÉÍÓÚÑa-zñáéíóú]+)?)",
-              texto_slot,
-          )
-          if not match_res:
-            continue
-
-          resultado_final = limpiar_texto(match_res.group(1)).upper()
-          clave_slot = (normalizar_nombre(nombre_loteria), hora)
-          slot_str_id = f"{normalizar_nombre(nombre_loteria)}_{hora}_{resultado_final}"
-
-          num_m = re.search(r"^(\d{1,2})", resultado_final)
-          if num_m:
-            if clave_slot not in resultados_por_sorteo:
-              resultados_por_sorteo[clave_slot] = set()
-            resultados_por_sorteo[clave_slot].add(
-                normalizar_num(num_m.group(1))
-            )
-
-          if slot_str_id in procesados_en_esta_corrida:
-            continue
-          procesados_en_esta_corrida.add(slot_str_id)
-
-          if primera_ejecucion:
-            slot_ya_enviado_o_marcar(slot_str_id)
-          else:
-            if not slot_ya_enviado_o_marcar(slot_str_id):
-              item_dict = {
-                  "loteria": nombre_loteria,
-                  "hora": hora,
-                  "resultado": resultado_final,
-              }
-              if item_dict not in nuevos_encontrados:
-                nuevos_encontrados.append(item_dict)
-                logging.info(
-                    f"✨ Nuevo resultado detectado: {nombre_loteria} - {hora} -"
-                    f" {resultado_final}"
-                )
-
-      # 2. PROCESAR RULETA ACTIVA
-      try:
-        urls_ra = [URL_LOTERIA, URL_RULETA_ACTIVA]
-        for url_fuente in urls_ra:
-          try:
-            res_ra = http_session.get(url_fuente, timeout=10, verify=False)
-            if res_ra.status_code != 200:
-              continue
-            soup_ra = BeautifulSoup(res_ra.text, "html.parser")
-            bloques_ra = soup_ra.find_all(
-                ["div", "article", "section", "tr", "li"],
-                class_=re.compile(
-                    r"draw|slot|row|item|sorteo|result|card|box", re.IGNORECASE
-                ),
-            )
-            if not bloques_ra:
-              bloques_ra = soup_ra.find_all(["div", "section"])
-
-            for bloque in bloques_ra:
-              texto_bloque = bloque.get_text(" ", strip=True).upper()
-              if (
-                  "RULETA ACTIVA" not in texto_bloque
-                  and "RULETA" not in texto_bloque
-              ):
-                continue
-
-              match_h = re.search(r"(\d{1,2}:\d{2}\s*(?:AM|PM))", texto_bloque)
-              if not match_h:
-                continue
-              hora_ra = limpiar_texto(match_h.group(1)).upper()
-
-              posiciones = {}
-              for letra in ["A", "B", "C", "D"]:
-                m_pos = re.search(
-                    rf"\b{letra}\b[^A-Z0-9]*(\d{{1,2}}\s*-\s*[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]+)?)",
-                    texto_bloque,
-                )
-                if m_pos:
-                  posiciones[letra] = limpiar_texto(m_pos.group(1))
-
-              if "D" in posiciones:
-                resultado_d = posiciones["D"]
-                nombre_loteria_ra = "RULETA ACTIVA"
-                clave_slot_ra = (normalizar_nombre(nombre_loteria_ra), hora_ra)
-                slot_str_id_ra = f"{normalizar_nombre(nombre_loteria_ra)}_{hora_ra}_{resultado_d}"
-
-                if clave_slot_ra not in resultados_por_sorteo:
-                  resultados_por_sorteo[clave_slot_ra] = set()
-                for let, val in posiciones.items():
-                  nm = re.search(r"^(\d{1,2})", val)
-                  if nm:
-                    resultados_por_sorteo[clave_slot_ra].add(
-                        normalizar_num(nm.group(1))
-                    )
-
-                if slot_str_id_ra in procesados_en_esta_corrida:
-                  continue
-                procesados_en_esta_corrida.add(slot_str_id_ra)
-
-                if primera_ejecucion:
-                  slot_ya_enviado_o_marcar(slot_str_id_ra)
-                else:
-                  if not slot_ya_enviado_o_marcar(slot_str_id_ra):
-                    item_dict_ra = {
-                        "loteria": nombre_loteria_ra,
-                        "hora": hora_ra,
-                        "resultado": resultado_d,
-                    }
-                    if item_dict_ra not in nuevos_encontrados:
-                      nuevos_encontrados.append(item_dict_ra)
-                      logging.info(
-                          f"✨ Nuevo resultado Ruleta Activa detectado:"
-                          f" {nombre_loteria_ra} - {hora_ra} - {resultado_d}"
-                      )
-          except Exception as e_sub:
-            logging.debug(f"Nota en fuente Ruleta Activa {url_fuente}: {e_sub}")
-            continue
+          nombre_loteria = t_text
           break
-      except Exception as e_ra:
-        logging.warning(f"⚠️️ Error procesando Ruleta Activa: {e_ra}")
 
-      if primera_ejecucion:
-        primera_ejecucion = False
-        guardar_estado_disco()
-        logging.info("✅ Sincronización inicial completada sin spam.")
-        return
+      # Si no se encuentra un título seguro dentro del bloque, se ignora en lugar de asumir un nombre incorrecto
+      if not nombre_loteria or len(nombre_loteria) > 40:
+        continue
 
-      if nuevos_encontrados:
-        markup_wa = InlineKeyboardMarkup()
-        markup_wa.add(
-            InlineKeyboardButton(
-                "📲 ESCRIBENOS AL WHATSAPP", url="https://wa.me/584124489363"
-            )
+      nombre_loteria = limpiar_texto(
+          re.sub(r"^[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+", "", nombre_loteria)
+      ).upper()
+      if not nombre_loteria:
+        continue
+
+      # Buscar los slots o elementos de sorteo dentro de ESTE bloque exclusivamente
+      slots_sorteo = tarjeta.find_all(
+          ["div", "li", "span", "tr"],
+          class_=re.compile(r"item|slot|draw|row|col", re.IGNORECASE),
+      )
+      if not slots_sorteo:
+        slots_sorteo = [tarjeta]
+
+      for slot in slots_sorteo:
+        texto_slot = limpiar_texto(slot.get_text(" ", strip=True)).upper()
+        if "PENDIENTE" in texto_slot:
+          continue
+
+        match_h = re.search(r"(\d{1,2}:\d{2}\s*(?:AM|PM))", texto_slot)
+        if not match_h:
+          continue
+        hora = limpiar_texto(match_h.group(1)).upper()
+
+        match_res = re.search(
+            r"(\d{1,2}\s-\s[A-ZÁÉÍÓÚÑa-zñáéíóú]+(?:\s+[A-ZÁÉÍÓÚÑa-zñáéíóú]+)?)",
+            texto_slot,
         )
-        markup_dict = markup_wa.to_dict()
+        if not match_res:
+          continue
 
-        for item_nuevo in nuevos_encontrados:
-          mensaje_res = (
-              "🎯 AGENCIA HAROLD JOSÉ 🎯\n"
-              "•••••••••••••••••••••••••••••••••••\n"
-              f"🎰 {item_nuevo['loteria']}\n"
-              f"🕒 {item_nuevo['hora']}  {item_nuevo['resultado']}\n"
-              "•••••••••••••••••••••••••••••••••••\n"
-              "📲 WHATSAPP: 04124489363"
+        resultado_final = limpiar_texto(match_res.group(1)).upper()
+
+        clave_slot = (normalizar_nombre(nombre_loteria), hora)
+
+        if clave_slot in procesados_en_esta_corrida:
+          continue
+        procesados_en_esta_corrida.add(clave_slot)
+
+        if primera_ejecucion:
+          horarios_enviados_hoy.add(clave_slot)
+        else:
+          if clave_slot not in horarios_enviados_hoy:
+            item_dict = {
+                "loteria": nombre_loteria,
+                "hora": hora,
+                "resultado": resultado_final,
+            }
+            if item_dict not in nuevos_encontrados:
+              nuevos_encontrados.append(item_dict)
+              horarios_enviados_hoy.add(clave_slot)
+              guardar_estado_disco()
+              logging.info(
+                  f"✨ Nuevo resultado detectado: {nombre_loteria} - {hora} -"
+                  f" {resultado_final}"
+              )
+
+    if primera_ejecucion:
+      primera_ejecucion = False
+      guardar_estado_disco()
+      logging.info(
+          "✅ Sincronización inicial completada. Slots bloqueados en memoria:"
+          f" {len(horarios_enviados_hoy)}"
+      )
+      return
+
+    if nuevos_encontrados:
+      markup_wa = InlineKeyboardMarkup()
+      markup_wa.add(
+          InlineKeyboardButton(
+              "📲 ESCRIBENOS AL WHATSAPP", url="https://wa.me/584124489363"
           )
-          enviar_telegram_con_botones(mensaje_res, markup_dict)
-          time.sleep(2)
+      )
+      markup_dict = markup_wa.to_dict()
 
-          num_match = re.search(r"^(\d{1,2})", item_nuevo["resultado"])
-          if num_match and regalos_hoy:
-            num_limpio = num_match.group(1)
-            for r_num, r_animal in regalos_hoy:
-              if (
-                  normalizar_num(num_limpio) == normalizar_num(r_num)
-                  or num_limpio.lstrip("0") == r_num.lstrip("0")
-              ):
-                mensaje_acierto = (
-                    "🎉🎉 ¡ACERTAMOS! 🎉🎉\n\n✅ 🎁 Regalo del Día\n\n"
-                    f"🎯 {item_nuevo['resultado']}\n"
-                    f"🎲 🎰 {item_nuevo['loteria']}\n"
-                    f"🕒 {item_nuevo['hora']}\n\n📲"
-                    " WHATSAPP: 04124489363\n\n🍀 ¡Felicidades a todos los que"
-                    " confiaron en Agencia Harold José!"
-                )
-                enviar_telegram_con_botones(mensaje_acierto, markup_dict)
-                time.sleep(2)
-                break
+      for item_nuevo in nuevos_encontrados:
+        mensaje_res = (
+            "🎯 AGENCIA HAROLD JOSÉ 🎯\n"
+            "•••••••••••••••••••••••••••••••••••\n"
+            f"🎰 {item_nuevo['loteria']}\n"
+            f"🕒 {item_nuevo['hora']}  {item_nuevo['resultado']}\n"
+            "•••••••••••••••••••••••••••••••••••\n"
+            "📲 WHATSAPP: 04124489363"
+        )
+        enviar_telegram_con_botones(mensaje_res, markup_dict)
+        time.sleep(2)
 
-          verificar_y_enviar_tripleta(
-              item_nuevo["loteria"], item_nuevo["hora"]
-          )
+        num_match = re.search(r"^(\d{1,2})", item_nuevo["resultado"])
+        if num_match and regalos_hoy:
+          num_limpio = num_match.group(1)
+          for r_num, r_animal in regalos_hoy:
+            if (
+                num_limpio.lstrip("0") == r_num.lstrip("0")
+                or num_limpio == r_num
+            ):
+              mensaje_acierto = (
+                  "🎉🎉 ¡ACERTAMOS! 🎉🎉\n\n✅ 🎁 Regalo del Día\n\n"
+                  f"🎯 {item_nuevo['resultado']}\n"
+                  f"🎲 🎰 {item_nuevo['loteria']}\n"
+                  f"🕒 {item_nuevo['hora']}\n\n📲 WHATSAPP: 04124489363\n\n🍀"
+                  " ¡Felicidades a todos los que confiaron en Agencia Harold"
+                  " José!"
+              )
+              enviar_telegram_con_botones(mensaje_acierto, markup_dict)
+              time.sleep(2)
+              break
 
   except Exception as e:
     logging.error(f"⚠️ Error detallado en verificación de resultados: {e}")
@@ -1150,16 +949,32 @@ def procesar_mensajes_privados(message):
       imagen_taquilla_file_id = message.photo[-1].file_id
       guardar_estado_disco()
       enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
+      logging.info("✅ Taquilla activada y publicada con la imagen adjunta.")
     else:
       taquilla_activa_hoy = True
       guardar_estado_disco()
       enviar_telegram(caption_taquilla, disable_web_preview=True)
+      logging.info("✅ Taquilla activada por texto.")
 
   elif "cashea" in caption_lower:
     if message.photo:
       imagen_cashea_file_id = message.photo[-1].file_id
       guardar_estado_disco()
-      bot.reply_to(message, "✅ ¡Imagen de Cashea guardada correctamente!")
+      bot.reply_to(
+          message,
+          "✅ ¡Imagen de Cashea guardada y actualizada permanentemente! Se"
+          " enviará automáticamente en sus horarios programados (de 9 AM a 4:30"
+          " PM).",
+      )
+      logging.info(
+          "✅ Imagen de Cashea permanente registrada y almacenada en disco."
+      )
+    else:
+      bot.reply_to(
+          message,
+          "ℹ️ Por favor adjunta la imagen con la palabra 'cashea' para"
+          " actualizarla correctamente.",
+      )
 
 
 @bot.message_handler(content_types=["photo"])
@@ -1192,6 +1007,7 @@ def procesar_limpieza_y_envio_animalitos(text):
     texto_limpio = text[pos:].strip()
     mensaje_completo = f"{HEADER_RESULTADOS}\n\n{texto_limpio}"
     enviar_telegram(mensaje_completo, disable_web_preview=True)
+    logging.info("✅ Mensaje programado / animalitos enviado con éxito.")
     return True
   return False
 
@@ -1206,7 +1022,7 @@ def iniciar_scheduler():
   scheduler.add_job(limpiar_memoria_diaria, "cron", hour=0, minute=0)
   scheduler.add_job(enviar_saludo_madrugada, "cron", hour=6, minute=30)
   scheduler.add_job(enviar_piramide_diaria, "cron", hour=6, minute=31)
-  scheduler.add_job(enviar_regalos_agencia_handler, "cron", hour=6, minute=45)
+  scheduler.add_job(enviar_regalos_agencia, "cron", hour=6, minute=45)
   scheduler.add_job(enviar_saludo_matutino, "cron", hour=7, minute=0)
   scheduler.add_job(enviar_tasa_dolar, "cron", hour=6, minute=30)
   scheduler.add_job(enviar_tasa_dolar, "cron", hour=18, minute=30)
@@ -1215,6 +1031,7 @@ def iniciar_scheduler():
   scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=15, minute=0)
   scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=18, minute=0)
 
+  # Horario actualizado de Cashea: Cada hora de 9 AM a 4 PM, y el último aviso a las 4:30 PM
   scheduler.add_job(enviar_anuncio_cashea, "cron", hour="9-16", minute=0)
   scheduler.add_job(enviar_anuncio_cashea, "cron", hour=16, minute=30)
 
@@ -1238,18 +1055,22 @@ def configurar_webhook():
       logging.info(f"✅ Webhook configurado exitosamente en: {webhook_url}")
     except Exception as e:
       logging.error(f"❌ Error configurando el webhook: {e}")
+  else:
+    logging.warning("⚠️ RENDER_EXTERNAL_URL no está definido.")
 
 
 if __name__ == "__main__":
   try:
-    configurar_webhook()
+    logging.info("🚀 Iniciando aplicación principal...")
     t_schedule = Thread(target=iniciar_scheduler)
     t_schedule.daemon = True
     t_schedule.start()
-    logging.info("⚙️ Planificador iniciado correctamente.")
+
+    # Configurar webhook al iniciar
+    configurar_webhook()
 
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, use_reloader=False)
   except Exception as e:
-    logging.critical(f"❌ Error crítico: {e}")
+    logging.critical(f"❌ Error crítico en ejecución principal: {e}")
     traceback.print_exc()
