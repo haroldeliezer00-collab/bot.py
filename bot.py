@@ -13,6 +13,7 @@ from flask import Flask, request
 import requests
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
+
 urllib3 = None
 try:
   import urllib3
@@ -195,13 +196,18 @@ def guardar_estado_disco():
 def slot_ya_enviado_o_marcar(clave_slot_str):
   """Bloqueo atómico multi-worker para evitar duplicados en Gunicorn"""
   try:
-    with open(LOCK_FILE, "w") as lock_f:
+    with open(LOCK_FILE, "a+") as lock_f:
       if os.name != "nt":
         import fcntl
+
         fcntl.flock(lock_f, fcntl.LOCK_EX)
 
       hoy_str = datetime.now().strftime("%Y-%m-%d")
-      data = {"fecha": hoy_str, "enviados": [], "primera_ejecucion": primera_ejecucion}
+      data = {
+          "fecha": hoy_str,
+          "enviados": [],
+          "primera_ejecucion": primera_ejecucion,
+      }
       if os.path.exists(STATE_FILE):
         try:
           with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -395,7 +401,7 @@ def test_piramide():
 
 @app.route("/test/regalos")
 def test_regalos():
-  enviar_regalos_agencia()
+  enviar_regalos_agencia_handler()
   return "Prueba de Regalos de la Agencia ejecutada."
 
 
@@ -478,7 +484,7 @@ def enviar_telegram(mensaje, disable_web_preview=True):
   try:
     response = http_session.post(url, json=payload, timeout=10)
     if response.status_code != 200:
-      logging.warning(f"⚠️ Error al enviar al canal: {response.text}")
+      logging.warning(f"⚠️️ Error al enviar al canal: {response.text}")
   except Exception as e:
     logging.warning(f"⚠️ Excepción de conexión con Telegram: {e}")
 
@@ -513,7 +519,7 @@ def enviar_telegram_foto(photo_id, caption):
     if response.status_code != 200:
       logging.warning(f"⚠️ Error al enviar foto al canal: {response.text}")
   except Exception as e:
-    logging.warning(f"⚠️️ Excepción al enviar foto: {e}")
+    logging.warning(f"⚠ Excepción al enviar foto: {e}")
 
 
 def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
@@ -548,6 +554,9 @@ def limpiar_memoria_diaria():
 
 
 def enviar_saludo_madrugada():
+  hoy_str = datetime.now().strftime("%Y-%m-%d")
+  if slot_ya_enviado_o_marcar(f"saludo_madrugada_{hoy_str}"):
+    return
   enviar_telegram(
       "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n🌅 ¡Despertando con la mejor energía y"
       " listos para ganar! 🌅\n\nComenzamos este nuevo día activos y"
@@ -630,6 +639,9 @@ def generar_piramide():
 
 
 def enviar_piramide_diaria():
+  hoy_str = datetime.now().strftime("%Y-%m-%d")
+  if slot_ya_enviado_o_marcar(f"piramide_diaria_{hoy_str}"):
+    return
   enviar_telegram(generar_piramide(), disable_web_preview=True)
 
 
@@ -672,10 +684,16 @@ def enviar_regalos_agencia():
 
 
 def enviar_regalos_agencia_handler():
+  hoy_str = datetime.now().strftime("%Y-%m-%d")
+  if slot_ya_enviado_o_marcar(f"regalos_agencia_{hoy_str}"):
+    return
   enviar_telegram(enviar_regalos_agencia(), disable_web_preview=True)
 
 
 def enviar_saludo_matutino():
+  hoy_str = datetime.now().strftime("%Y-%m-%d")
+  if slot_ya_enviado_o_marcar(f"saludo_matutino_{hoy_str}"):
+    return
   enviar_telegram(
       "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n🌅 ¡Buenos días a todos! 🌅\n\nYa arrancamos"
       " un nuevo día con la mejor energía. Estaremos compartiendo todos los"
@@ -691,11 +709,22 @@ def enviar_saludo_matutino():
 
 
 def enviar_anuncio_publicitario():
+  ahora = datetime.now()
+  hoy_str = ahora.strftime("%Y-%m-%d")
+  if slot_ya_enviado_o_marcar(f"anuncio_publicitario_{ahora.hour}_{hoy_str}"):
+    return
   enviar_telegram(TEXTO_PUBLICITARIO, disable_web_preview=True)
 
 
 def enviar_anuncio_cashea():
   global imagen_cashea_file_id
+  ahora = datetime.now()
+  hoy_str = ahora.strftime("%Y-%m-%d")
+  if slot_ya_enviado_o_marcar(
+      f"anuncio_cashea_{ahora.hour}_{ahora.minute}_{hoy_str}"
+  ):
+    return
+
   markup = InlineKeyboardMarkup()
   url_jugar = "https://wa.me/584124489363?text=Hola%2C%20quiero%20jugar%20con%20Cashea%20en%20Agencia%20Harold%20Jos%C3%A9."
   url_consultar = "https://wa.me/584124489363?text=Hola%2C%20quiero%20consultar%20mis%20cuotas%20de%20Cashea%20en%20Agencia%20Harold%20Jos%C3%A9."
@@ -715,6 +744,13 @@ def enviar_anuncio_cashea():
 
 
 def enviar_aviso_tiempo_cumplido():
+  ahora = datetime.now()
+  hoy_str = ahora.strftime("%Y-%m-%d")
+  if slot_ya_enviado_o_marcar(
+      f"tiempo_cumplido_{ahora.hour}_{ahora.minute}_{hoy_str}"
+  ):
+    return
+
   enviar_telegram(
       "⏰ ¡Tiempo cumplido! Han finalizado las jugadas para este sorteo en la"
       " AGENCIA HAROLD JOSÉ. ¡Muy atentos a los resultados y que la suerte esté"
@@ -724,6 +760,12 @@ def enviar_aviso_tiempo_cumplido():
 
 
 def enviar_tasa_dolar():
+  ahora = datetime.now()
+  hoy_str = ahora.strftime("%Y-%m-%d")
+  turno = "AM" if ahora.hour < 12 else "PM"
+  if slot_ya_enviado_o_marcar(f"tasa_dolar_{turno}_{hoy_str}"):
+    return
+
   try:
     response = http_session.get(URL_BCV, timeout=15, verify=False)
     precio_dolar = "756,71"
@@ -754,6 +796,10 @@ def enviar_tasa_dolar():
 
 def tarea_envio_programado_taquilla():
   global taquilla_activa_hoy, imagen_taquilla_file_id
+  hoy_str = datetime.now().strftime("%Y-%m-%d")
+  if slot_ya_enviado_o_marcar(f"taquilla_1500_{hoy_str}"):
+    return
+
   if taquilla_activa_hoy:
     if imagen_taquilla_file_id:
       enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
@@ -766,13 +812,17 @@ def tarea_envio_programado_taquilla():
 def tarea_minuto_diez():
   global ultima_hora_polla
   ahora = datetime.now()
+  hoy_str = ahora.strftime("%Y-%m-%d")
   if (
       (ahora.hour == 7 and ahora.minute >= 10)
       or (7 < ahora.hour < 17)
       or (ahora.hour == 17 and ahora.minute == 0)
   ):
     clave_hora = (ahora.date(), ahora.hour)
+    slot_id = f"polla_{ahora.hour}_{hoy_str}"
     if ultima_hora_polla != clave_hora:
+      if slot_ya_enviado_o_marcar(slot_id):
+        return
       ultima_hora_polla = clave_hora
       guardar_estado_disco()
       enviar_telegram(
@@ -784,6 +834,10 @@ def tarea_minuto_diez():
 
 def enviar_mensaje_cierre():
   global taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id, ultima_hora_polla, regalos_hoy, tripleta_enviada_hoy, resultados_por_sorteo
+  hoy_str = datetime.now().strftime("%Y-%m-%d")
+  if slot_ya_enviado_o_marcar(f"cierre_jornada_{hoy_str}"):
+    return
+
   enviar_telegram(
       "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n🌙 ¡FINAL DE JORNADA! 🌙\n\nEstos fueron"
       " todos los resultados del día de hoy. ¡Gracias por jugar con nosotros!"
@@ -812,6 +866,10 @@ def verificar_y_enviar_tripleta(loteria_nombre, hora_sorteo):
   sorteo_norm = resultados_por_sorteo[clave_slot]
 
   if regalos_norm.issubset(sorteo_norm):
+    hoy_str = datetime.now().strftime("%Y-%m-%d")
+    if slot_ya_enviado_o_marcar(f"tripleta_{hoy_str}"):
+      return
+
     tripleta_enviada_hoy = True
     guardar_estado_disco()
 
@@ -1198,27 +1256,14 @@ def configurar_webhook():
       logging.error(f"❌ Error configurando el webhook: {e}")
 
 
-# --- INICIO PROTEGIDO CONTRA DUPLICACIÓN MULTI-WORKER ---
-iniciar_hilo = True
-try:
-  with open("scheduler_run.lock", "w") as lock_f:
-    if os.name != "nt":
-      import fcntl
-      fcntl.flock(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-except Exception:
-  iniciar_hilo = False
-
-if iniciar_hilo:
-  t_schedule = Thread(target=iniciar_scheduler)
-  t_schedule.daemon = True
-  t_schedule.start()
-  logging.info("⚙️ Planificador iniciado en este proceso principal exclusivo.")
-else:
-  logging.info("ℹ️ Planificador omitido en este worker secundario para prevenir duplicados.")
-
 if __name__ == "__main__":
   try:
     configurar_webhook()
+    t_schedule = Thread(target=iniciar_scheduler)
+    t_schedule.daemon = True
+    t_schedule.start()
+    logging.info("⚙️ Planificador iniciado correctamente.")
+
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, use_reloader=False)
   except Exception as e:
