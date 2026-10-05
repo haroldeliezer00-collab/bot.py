@@ -50,7 +50,6 @@ URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_RULETA_ACTIVA = "https://www.ruletactiva.com.ve"
 URL_BCV = "https://www.bcv.org.ve/"
 STATE_FILE = "bot_state.json"
-LOCK_FILE = "state_lock.lock"
 
 # Sesión HTTP optimizada para reuso de conexiones
 http_session = requests.Session()
@@ -194,45 +193,30 @@ def guardar_estado_disco():
 
 
 def slot_ya_enviado_o_marcar(clave_slot_str):
-  """Bloqueo atómico multi-worker para evitar duplicados en Gunicorn"""
+  """Control de envíos único por día/slot guardado en disco"""
   try:
-    with open(LOCK_FILE, "a+") as lock_f:
-      if os.name != "nt":
-        import fcntl
+    hoy_str = datetime.now().strftime("%Y-%m-%d")
+    data = {"fecha": hoy_str, "enviados": [], "primera_ejecucion": primera_ejecucion}
+    if os.path.exists(STATE_FILE):
+      try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+          loaded = json.load(f)
+          if loaded.get("fecha") == hoy_str:
+            data = loaded
+      except Exception:
+        pass
 
-        fcntl.flock(lock_f, fcntl.LOCK_EX)
+    enviados = data.get("enviados", [])
+    if clave_slot_str in enviados:
+      return True  # Ya fue enviado
 
-      hoy_str = datetime.now().strftime("%Y-%m-%d")
-      data = {
-          "fecha": hoy_str,
-          "enviados": [],
-          "primera_ejecucion": primera_ejecucion,
-      }
-      if os.path.exists(STATE_FILE):
-        try:
-          with open(STATE_FILE, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
-            if loaded.get("fecha") == hoy_str:
-              data = loaded
-        except Exception:
-          pass
+    enviados.append(clave_slot_str)
+    data["enviados"] = enviados
+    data["fecha"] = hoy_str
 
-      enviados = data.get("enviados", [])
-      if clave_slot_str in enviados:
-        if os.name != "nt":
-          fcntl.flock(lock_f, fcntl.LOCK_UN)
-        return True  # Ya fue enviado por otro worker
-
-      enviados.append(clave_slot_str)
-      data["enviados"] = enviados
-      data["fecha"] = hoy_str
-
-      with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-      if os.name != "nt":
-        fcntl.flock(lock_f, fcntl.LOCK_UN)
-      return False  # Es nuevo, proceder a enviar
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+      json.dump(data, f, ensure_ascii=False, indent=2)
+    return False  # Nuevo, proceder a enviar
   except Exception as e:
     logging.error(f"Error en slot_ya_enviado_o_marcar: {e}")
     return False
@@ -484,7 +468,7 @@ def enviar_telegram(mensaje, disable_web_preview=True):
   try:
     response = http_session.post(url, json=payload, timeout=10)
     if response.status_code != 200:
-      logging.warning(f"⚠️️ Error al enviar al canal: {response.text}")
+      logging.warning(f"⚠️ Error al enviar al canal: {response.text}")
   except Exception as e:
     logging.warning(f"⚠️ Excepción de conexión con Telegram: {e}")
 
@@ -519,7 +503,7 @@ def enviar_telegram_foto(photo_id, caption):
     if response.status_code != 200:
       logging.warning(f"⚠️ Error al enviar foto al canal: {response.text}")
   except Exception as e:
-    logging.warning(f"⚠ Excepción al enviar foto: {e}")
+    logging.warning(f"⚠️ Excepción al enviar foto: {e}")
 
 
 def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
@@ -1097,7 +1081,7 @@ def verificar_resultados():
             continue
           break
       except Exception as e_ra:
-        logging.warning(f"⚠️ Error procesando Ruleta Activa: {e_ra}")
+        logging.warning(f"⚠️️ Error procesando Ruleta Activa: {e_ra}")
 
       if primera_ejecucion:
         primera_ejecucion = False
