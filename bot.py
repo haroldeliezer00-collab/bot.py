@@ -33,9 +33,9 @@ except Exception as e:
 # Desactivar advertencias de certificados SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Credenciales y canal principal configurado
+# Credenciales y canal principal configurado con el nuevo token
 TOKEN = os.environ.get(
-    "TELEGRAM_TOKEN", "8728747633:AAHBUo_UQagbqoWFua_2nKAYjYqtZCqNp9I"
+    "TELEGRAM_TOKEN", "8733552499:AAFL_86sFP2twwGRF1rIXhGeZPRYcOqW8Go"
 )
 CANAL = "@resultadosagharoldjose"  # Canal oficial de producción indicado
 ENLACE_CANAL = "https://t.me/resultadosagharoldjose"
@@ -193,7 +193,6 @@ def registrar_historial_sorteo(fecha, loteria, hora, num, animal):
   try:
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Evitar duplicar el mismo registro exacto en el historial
     cursor.execute(
         """
             SELECT id FROM lottery_history 
@@ -218,13 +217,11 @@ def registrar_historial_sorteo(fecha, loteria, hora, num, animal):
 def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, animal_nombre):
   """Analiza repeticiones, tripletas y alertas especiales para un resultado."""
   try:
-    # 1. Registrar en historial diario
     registrar_historial_sorteo(fecha_str, nombre_loteria, hora, num_limpio, animal_nombre)
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    # Contar cuántas veces ha salido este número en esta lotería hoy
     cursor.execute(
         """
             SELECT COUNT(*) FROM lottery_history 
@@ -239,7 +236,6 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
     markup_wa.add(InlineKeyboardButton("📲 ESCRIBENOS AL WHATSAPP", url="https://wa.me/584124489363"))
     markup_dict = markup_wa.to_dict()
 
-    # 2. Control de Repetición 2 veces (Chiste / Rompe-hielo)
     if count_rep == 2:
       id_alerta_2 = f"REP2_{fecha_str}_{normalizar_nombre(nombre_loteria)}_{num_limpio}"
       if verificar_y_registrar_resultado(fecha_str, "ALERTA", nombre_loteria, "REPETIDO_2", id_alerta_2):
@@ -253,7 +249,6 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
         logging.info(f"[ALERT SENT] Repetición x2 enviada: {nombre_loteria} - {num_limpio}")
         time.sleep(2)
 
-    # 3. Control de Repetición 3+ veces ("Se jodió compadre")
     elif count_rep >= 3:
       id_alerta_3 = f"REP3_{fecha_str}_{normalizar_nombre(nombre_loteria)}_{num_limpio}_{count_rep}"
       if verificar_y_registrar_resultado(fecha_str, "ALERTA", nombre_loteria, f"REPETIDO_{count_rep}", id_alerta_3):
@@ -268,7 +263,6 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
         logging.info(f"[ALERT SENT] Repetición x{count_rep} enviada: {nombre_loteria} - {num_limpio}")
         time.sleep(2)
 
-    # 4. Control de Tripleta (Los 3 regalos en la misma lotería entre 8 AM y 7 PM)
     ahora_dt = datetime.now()
     if 8 <= ahora_dt.hour < 19 and regalos_hoy and len(regalos_hoy) == 3:
       conn = sqlite3.connect(DB_FILE)
@@ -701,14 +695,12 @@ def enviar_encuesta_sorteo():
     turno = "AM" if ahora.hour < 12 else "PM"
     poll_session = f"{fecha_str}_{turno}"
 
-    # Seleccionar 12 animalitos populares / aleatorios para la encuesta
     keys_muestreo = ["1", "5", "8", "10", "11", "12", "13", "18", "21", "24", "27", "36"]
     
     markup = InlineKeyboardMarkup(row_width=3)
     botones = []
     for k in keys_muestreo:
       nombre_an = ANIMALITOS_DICT.get(k, "Animal")
-      # Callback format: poll_{session}_{num}
       botones.append(InlineKeyboardButton(f"{k} - {nombre_an}", callback_data=f"poll_{poll_session}_{k}"))
     
     markup.add(*botones)
@@ -753,7 +745,6 @@ def handle_poll_vote(call):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    # 1. Verificar si el usuario ya votó en esta sesión
     cursor.execute("SELECT num, animal FROM poll_votes WHERE poll_session = ? AND user_id = ?", (poll_session, user_id))
     user_vote = cursor.fetchone()
     if user_vote:
@@ -761,7 +752,6 @@ def handle_poll_vote(call):
       bot.answer_callback_query(call.id, text=f"❌ Ya elegiste el {user_vote[0]} - {user_vote[1]} en esta encuesta.", show_alert=True)
       return
 
-    # 2. Verificar si el animal ya fue elegido por otro usuario
     cursor.execute("SELECT user_name FROM poll_votes WHERE poll_session = ? AND num = ?", (poll_session, num_elegido))
     animal_taken = cursor.fetchone()
     if animal_taken:
@@ -769,21 +759,18 @@ def handle_poll_vote(call):
       bot.answer_callback_query(call.id, text=f"❌ ¡Ese animal ya fue elegido por {animal_taken[0]}! Elige otro.", show_alert=True)
       return
 
-    # 3. Registrar el voto
     cursor.execute(
         "INSERT INTO poll_votes (fecha, poll_session, user_id, user_name, num, animal) VALUES (?, ?, ?, ?, ?, ?)",
         (datetime.now().strftime("%Y-%m-%d"), poll_session, user_id, user_name, num_elegido, animal_nombre)
     )
     conn.commit()
 
-    # Obtener todas las selecciones actuales para actualizar el texto
     cursor.execute("SELECT user_name, num, animal FROM poll_votes WHERE poll_session = ?", (poll_session,))
     votos_actuales = cursor.fetchall()
     conn.close()
 
     bot.answer_callback_query(call.id, text=f"✅ ¡Has seleccionado el {num_elegido} - {animal_nombre} con éxito!", show_alert=False)
 
-    # Actualizar texto del mensaje con las selecciones
     lista_votos_str = "\n".join([f"• {v[0]}: **{v[1]} - {v[2]}**" for v in votos_actuales])
     turno = "AM" if "AM" in poll_session else "PM"
     
@@ -794,7 +781,6 @@ def handle_poll_vote(call):
         f"🏆 **Selecciones actuales:**\n{lista_votos_str}"
     )
 
-    # Reconstruir los botones originales (manteniéndolos activos)
     keys_muestreo = ["1", "5", "8", "10", "11", "12", "13", "18", "21", "24", "27", "36"]
     markup = InlineKeyboardMarkup(row_width=3)
     botones = []
@@ -1176,13 +1162,11 @@ def verificar_resultados():
           continue
         procesados_en_esta_corrida.add(clave_slot)
 
-        # Extraer número y animal limpio
         num_match = re.search(r"^(\d{1,2})", resultado_final)
         num_limpio = num_match.group(1) if num_match else "0"
         animal_nombre = ANIMALITOS_DICT.get(num_limpio, ANIMALITOS_DICT.get(num_limpio.lstrip("0"), "Animal"))
 
         if primera_ejecucion:
-          # Registro inicial para evitar spam de resultados pasados al arrancar
           verificar_y_registrar_resultado(
               fecha_actual_str,
               agencia_nombre,
@@ -1192,7 +1176,6 @@ def verificar_resultados():
           )
           registrar_historial_sorteo(fecha_actual_str, nombre_loteria, hora, num_limpio, animal_nombre)
         else:
-          # Verificación y registro atómico centralizado
           if verificar_y_registrar_resultado(
               fecha_actual_str,
               agencia_nombre,
@@ -1227,7 +1210,6 @@ def verificar_resultados():
 
             time.sleep(2)
 
-            # Analizar eventos especiales (Regalos, Tripleta, Repeticiones x2 y x3+)
             analizar_eventos_especiales(fecha_actual_str, nombre_loteria, hora, num_limpio, animal_nombre)
 
             if regalos_hoy:
@@ -1363,7 +1345,6 @@ def iniciar_scheduler():
   scheduler.add_job(enviar_anuncio_cashea, "cron", hour="9-16", minute=0)
   scheduler.add_job(enviar_anuncio_cashea, "cron", hour=16, minute=30)
 
-  # Programar encuestas 2 veces al día (10:00 AM y 3:00 PM)
   scheduler.add_job(enviar_encuesta_sorteo, "cron", hour=10, minute=0)
   scheduler.add_job(enviar_encuesta_sorteo, "cron", hour=15, minute=0)
 
