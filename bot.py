@@ -6,7 +6,6 @@ import random
 import re
 from threading import Thread
 import time
-database = None
 import traceback
 from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
@@ -108,7 +107,7 @@ ANIMALITOS_DICT = {
 
 
 def inicializar_db():
-  """Inicializa la base de datos SQLite persistente para control de duplicados."""
+  """Inicializa la base de datos SQLite persistente para control de duplicados e historial."""
   try:
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -123,16 +122,37 @@ def inicializar_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+    cursor.execute("""
+            CREATE TABLE IF NOT EXISTS lottery_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha TEXT,
+                loteria TEXT,
+                hora TEXT,
+                num TEXT,
+                animal TEXT
+            )
+        """)
+    cursor.execute("""
+            CREATE TABLE IF NOT EXISTS poll_votes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha TEXT,
+                poll_session TEXT,
+                user_id INTEGER,
+                user_name TEXT,
+                num TEXT,
+                animal TEXT,
+                UNIQUE(poll_session, user_id),
+                UNIQUE(poll_session, num)
+            )
+        """)
     conn.commit()
     conn.close()
-    logging.info("🗄️ Base de datos SQLite inicializada correctamente.")
+    logging.info("🗄️ Base de datos SQLite inicializada correctamente con tablas de historial y encuestas.")
   except Exception as e:
     logging.error(f"❌ Error inicializando base de datos SQLite: {e}")
 
 
-def verificar_y_registrar_resultado(
-    fecha, agencia, loteria, hora, resultado
-):
+def verificar_y_registrar_resultado(fecha, agencia, loteria, hora, resultado):
   """Función central atómica para evitar duplicados mediante ID único y SQLite."""
   f_norm = limpiar_texto(str(fecha)).upper()
   ag_norm = normalizar_nombre(str(agencia))
@@ -140,13 +160,11 @@ def verificar_y_registrar_resultado(
   h_norm = limpiar_texto(str(hora)).upper()
   res_norm = limpiar_texto(str(resultado)).upper()
 
-  # Construcción del ID único normalizado
   result_id = f"{f_norm}_{ag_norm}_{lot_norm}_{h_norm}_{res_norm}"
 
   try:
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Operación atómica con INSERT OR IGNORE para prevenir condiciones de carrera
     cursor.execute(
         """
             INSERT OR IGNORE INTO sent_results (result_id, fecha, agencia, loteria, hora, resultado)
@@ -157,16 +175,10 @@ def verificar_y_registrar_resultado(
     conn.commit()
 
     if cursor.rowcount > 0:
-      logging.info(
-          f"[NEW RESULT] Resultado nuevo detectado y registrado: {lot_norm} |"
-          f" {h_norm} | {res_norm} (ID: {result_id})"
-      )
+      logging.info(f"[NEW RESULT] Resultado nuevo detectado: {lot_norm} | {h_norm} | {res_norm} (ID: {result_id})")
       return True
     else:
-      logging.info(
-          f"[DUPLICATE IGNORED] Resultado duplicado descartado: {lot_norm} |"
-          f" {h_norm} | {res_norm} (ID: {result_id})"
-      )
+      logging.info(f"[DUPLICATE IGNORED] Resultado duplicado descartado: {lot_norm} | {h_norm} | {res_norm} (ID: {result_id})")
       return False
   except Exception as e:
     logging.error(f"[RESULT ERROR] Error en base de datos SQLite: {e}")
@@ -174,6 +186,127 @@ def verificar_y_registrar_resultado(
   finally:
     if "conn" in locals() and conn:
       conn.close()
+
+
+def registrar_historial_sorteo(fecha, loteria, hora, num, animal):
+  """Registra cada sorteo salido en la base de datos para análisis diario."""
+  try:
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    # Evitar duplicar el mismo registro exacto en el historial
+    cursor.execute(
+        """
+            SELECT id FROM lottery_history 
+            WHERE fecha = ? AND loteria = ? AND hora = ? AND num = ?
+        """,
+        (fecha, loteria, hora, num),
+    )
+    if not cursor.fetchone():
+      cursor.execute(
+          """
+                INSERT INTO lottery_history (fecha, loteria, hora, num, animal)
+                VALUES (?, ?, ?, ?, ?)
+            """,
+          (fecha, loteria, hora, num, animal),
+      )
+      conn.commit()
+    conn.close()
+  except Exception as e:
+    logging.error(f"❌ Error registrando historial de sorteo: {e}")
+
+
+def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, animal_nombre):
+  """Analiza repeticiones, tripletas y alertas especiales para un resultado."""
+  try:
+    # 1. Registrar en historial diario
+    registrar_historial_sorteo(fecha_str, nombre_loteria, hora, num_limpio, animal_nombre)
+
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    # Contar cuántas veces ha salido este número en esta lotería hoy
+    cursor.execute(
+        """
+            SELECT COUNT(*) FROM lottery_history 
+            WHERE fecha = ? AND loteria = ? AND num = ?
+        """,
+        (fecha_str, nombre_loteria, num_limpio),
+    )
+    count_rep = cursor.fetchone()[0]
+    conn.close()
+
+    markup_wa = InlineKeyboardMarkup()
+    markup_wa.add(InlineKeyboardButton("📲 ESCRIBENOS AL WHATSAPP", url="https://wa.me/584124489363"))
+    markup_dict = markup_wa.to_dict()
+
+    # 2. Control de Repetición 2 veces (Chiste / Rompe-hielo)
+    if count_rep == 2:
+      id_alerta_2 = f"REP2_{fecha_str}_{normalizar_nombre(nombre_loteria)}_{num_limpio}"
+      if verificar_y_registrar_resultado(fecha_str, "ALERTA", nombre_loteria, "REPETIDO_2", id_alerta_2):
+        mensaje_chiste = (
+            f"🔄 **¡VUELVE A APARECER!** 🔄\n\n"
+            f"El **{num_limpio} - {animal_nombre}** acaba de repetir en **{nombre_loteria}**. "
+            f"¡A ese animalito le tuvieron que poner pila extra hoy para correr tanto! 🔋😂\n\n"
+            f"📲 WHATSAPP: 04124489363"
+        )
+        enviar_telegram_con_botones(mensaje_chiste, markup_dict)
+        logging.info(f"[ALERT SENT] Repetición x2 enviada: {nombre_loteria} - {num_limpio}")
+        time.sleep(2)
+
+    # 3. Control de Repetición 3+ veces ("Se jodió compadre")
+    elif count_rep >= 3:
+      id_alerta_3 = f"REP3_{fecha_str}_{normalizar_nombre(nombre_loteria)}_{num_limpio}_{count_rep}"
+      if verificar_y_registrar_resultado(fecha_str, "ALERTA", nombre_loteria, f"REPETIDO_{count_rep}", id_alerta_3):
+        mensaje_se_jodio = (
+            f"🚨 **¡SE JODIÓ COMPADRE!** 🚨\n\n"
+            f"¿Se quedaron sin animalitos en la banca o qué? El **{num_limpio} - {animal_nombre}** "
+            f"ya ha salido **{count_rep} veces hoy** en **{nombre_loteria}**. "
+            f"¡Agarren ese animal antes de que se escape del terminal! 🔥🐯\n\n"
+            f"📲 WHATSAPP: 04124489363"
+        )
+        enviar_telegram_con_botones(mensaje_se_jodio, markup_dict)
+        logging.info(f"[ALERT SENT] Repetición x{count_rep} enviada: {nombre_loteria} - {num_limpio}")
+        time.sleep(2)
+
+    # 4. Control de Tripleta (Los 3 regalos en la misma lotería entre 8 AM y 7 PM)
+    ahora_dt = datetime.now()
+    if 8 <= ahora_dt.hour < 19 and regalos_hoy and len(regalos_hoy) == 3:
+      conn = sqlite3.connect(DB_FILE)
+      cursor = conn.cursor()
+      cursor.execute(
+          """
+              SELECT DISTINCT num FROM lottery_history 
+              WHERE fecha = ? AND loteria = ?
+          """,
+          (fecha_str, nombre_loteria),
+      )
+      salidos_hoy = {row[0].lstrip("0") for row in cursor.fetchall()}
+      conn.close()
+
+      regalos_nums = {r[0].lstrip("0") for r in regalos_hoy}
+      if regalos_nums.issubset(salidos_hoy):
+        id_tripleta = f"TRIPLETA_{fecha_str}_{normalizar_nombre(nombre_loteria)}"
+        if verificar_y_registrar_resultado(fecha_str, "AGENCIA", nombre_loteria, "TRIPLETA", id_tripleta):
+          r1 = f"{regalos_hoy[0][0]} - {regalos_hoy[0][1]}"
+          r2 = f"{regalos_hoy[1][0]} - {regalos_hoy[1][1]}"
+          r3 = f"{regalos_hoy[2][0]} - {regalos_hoy[2][1]}"
+
+          mensaje_tripleta = (
+              f"🎉🎁 **¡TRIPLETAZA COMPLETADA EN LA BANCA!** 🥳🎉\n\n"
+              f"¡Felicidades a todos los que jugaron los 3 regalos de la mañana! "
+              f"Los 3 fijos salieron hoy en **{nombre_loteria}**:\n\n"
+              f"⭐ {r1}\n"
+              f"⭐ {r2}\n"
+              f"⭐ {r3}\n\n"
+              f"🏆 ¡Tripleta completada con éxito en la Agencia Harold José!\n\n"
+              f"📲 WHATSAPP: 04124489363"
+          )
+          enviar_telegram_con_botones(mensaje_tripleta, markup_dict)
+          logging.info(f"[TRIPLETA SENT] Tripleta completada y enviada: {nombre_loteria}")
+          time.sleep(2)
+
+  except Exception as e:
+    logging.error(f"❌ Error en analizar_eventos_especiales: {e}")
 
 
 def cargar_estado_disco():
@@ -385,7 +518,7 @@ def home():
       " Taquilla Activa</a><br>👉 <a href='/test/pollas'>Probar Aviso de Pollas"
       " (Minuto 10)</a><br>👉 <a href='/test/resultados'>Forzar Revisión de"
       " Resultados Individuales</a><br>👉 <a href='/test/cierre'>Probar Mensaje"
-      " de Cierre (9:10 PM)</a>"
+      " de Cierre (9:10 PM)</a><br>👉 <a href='/test/encuesta'>Probar Encuesta Interactiva</a>"
   )
 
 
@@ -478,6 +611,12 @@ def test_cierre():
   return "Prueba de Cierre de Jornada ejecutada."
 
 
+@app.route("/test/encuesta")
+def test_encuesta():
+  enviar_encuesta_sorteo()
+  return "Prueba de Encuesta Interactiva ejecutada."
+
+
 def limpiar_texto(texto):
   return " ".join(texto.split())
 
@@ -532,9 +671,7 @@ def enviar_telegram_foto(photo_id, caption):
     if response.status_code != 200:
       logging.warning(f"⚠️ Error al enviar foto al canal: {response.text}")
   except Exception as e:
-    logging.warning(
-        f"⚠️ Excepción de conexión con Telegram al enviar foto: {e}"
-    )
+    logging.warning(f"⚠️ Excepción de conexión con Telegram al enviar foto: {e}")
 
 
 def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
@@ -550,11 +687,132 @@ def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
   try:
     response = http_session.post(url, json=payload, timeout=10)
     if response.status_code != 200:
-      logging.warning(
-          f"⚠️ Error al enviar foto con botones al canal: {response.text}"
-      )
+      logging.warning(f"⚠️ Error al enviar foto con botones al canal: {response.text}")
   except Exception as e:
     logging.warning(f"⚠️ Excepción al enviar foto con botones: {e}")
+
+
+# --- SISTEMA DE ENCUESTAS INTERACTIVAS (EXCLUSIVAS) ---
+def enviar_encuesta_sorteo():
+  """Envía una encuesta interactiva dos veces al día donde cada animalito solo puede ser elegido por una persona."""
+  try:
+    ahora = datetime.now()
+    fecha_str = ahora.strftime("%Y-%m-%d")
+    turno = "AM" if ahora.hour < 12 else "PM"
+    poll_session = f"{fecha_str}_{turno}"
+
+    # Seleccionar 12 animalitos populares / aleatorios para la encuesta
+    keys_muestreo = ["1", "5", "8", "10", "11", "12", "13", "18", "21", "24", "27", "36"]
+    
+    markup = InlineKeyboardMarkup(row_width=3)
+    botones = []
+    for k in keys_muestreo:
+      nombre_an = ANIMALITOS_DICT.get(k, "Animal")
+      # Callback format: poll_{session}_{num}
+      botones.append(InlineKeyboardButton(f"{k} - {nombre_an}", callback_data=f"poll_{poll_session}_{k}"))
+    
+    markup.add(*botones)
+    markup_dict = markup.to_dict()
+
+    texto_encuesta = (
+        f"📊 **¡ENCUESTA DE LA SUERTE - TURNO {turno}!** 🍀\n\n"
+        f"¿Cuál animalito crees que saldrá en el próximo sorteo?\n"
+        f"👇 *Toca un botón para elegir tu animal.* ¡Ojo! Cada animalito es **único** y una vez que alguien lo elige, nadie más puede seleccionarlo en esta ronda. ¡Solo 1 voto por persona!\n\n"
+        f"🏆 **Selecciones actuales:** (Nadie ha votado aún)"
+    )
+
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CANAL,
+        "text": texto_encuesta,
+        "parse_mode": "Markdown",
+        "reply_markup": markup_dict,
+        "disable_web_page_preview": True,
+    }
+    response = http_session.post(url, json=payload, timeout=10)
+    if response.status_code == 200:
+      logging.info(f"✅ Encuesta interactiva enviada con éxito para la sesión {poll_session}")
+    else:
+      logging.warning(f"⚠️ Error enviando encuesta: {response.text}")
+  except Exception as e:
+    logging.error(f"❌ Error en enviar_encuesta_sorteo: {e}")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("poll_"))
+def handle_poll_vote(call):
+  try:
+    partes = call.data.split("_")
+    if len(partes) < 3:
+      return
+    poll_session = partes[1]
+    num_elegido = partes[2]
+    user_id = call.from_user.id
+    user_name = call.from_user.first_name or "Usuario"
+    animal_nombre = ANIMALITOS_DICT.get(num_elegido, "Animal")
+
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    # 1. Verificar si el usuario ya votó en esta sesión
+    cursor.execute("SELECT num, animal FROM poll_votes WHERE poll_session = ? AND user_id = ?", (poll_session, user_id))
+    user_vote = cursor.fetchone()
+    if user_vote:
+      conn.close()
+      bot.answer_callback_query(call.id, text=f"❌ Ya elegiste el {user_vote[0]} - {user_vote[1]} en esta encuesta.", show_alert=True)
+      return
+
+    # 2. Verificar si el animal ya fue elegido por otro usuario
+    cursor.execute("SELECT user_name FROM poll_votes WHERE poll_session = ? AND num = ?", (poll_session, num_elegido))
+    animal_taken = cursor.fetchone()
+    if animal_taken:
+      conn.close()
+      bot.answer_callback_query(call.id, text=f"❌ ¡Ese animal ya fue elegido por {animal_taken[0]}! Elige otro.", show_alert=True)
+      return
+
+    # 3. Registrar el voto
+    cursor.execute(
+        "INSERT INTO poll_votes (fecha, poll_session, user_id, user_name, num, animal) VALUES (?, ?, ?, ?, ?, ?)",
+        (datetime.now().strftime("%Y-%m-%d"), poll_session, user_id, user_name, num_elegido, animal_nombre)
+    )
+    conn.commit()
+
+    # Obtener todas las selecciones actuales para actualizar el texto
+    cursor.execute("SELECT user_name, num, animal FROM poll_votes WHERE poll_session = ?", (poll_session,))
+    votos_actuales = cursor.fetchall()
+    conn.close()
+
+    bot.answer_callback_query(call.id, text=f"✅ ¡Has seleccionado el {num_elegido} - {animal_nombre} con éxito!", show_alert=False)
+
+    # Actualizar texto del mensaje con las selecciones
+    lista_votos_str = "\n".join([f"• {v[0]}: **{v[1]} - {v[2]}**" for v in votos_actuales])
+    turno = "AM" if "AM" in poll_session else "PM"
+    
+    nuevo_texto = (
+        f"📊 **¡ENCUESTA DE LA SUERTE - TURNO {turno}!** 🍀\n\n"
+        f"¿Cuál animalito crees que saldrá en el próximo sorteo?\n"
+        f"👇 *Toca un botón para elegir tu animal.* ¡Cada animalito es único!\n\n"
+        f"🏆 **Selecciones actuales:**\n{lista_votos_str}"
+    )
+
+    # Reconstruir los botones originales (manteniéndolos activos)
+    keys_muestreo = ["1", "5", "8", "10", "11", "12", "13", "18", "21", "24", "27", "36"]
+    markup = InlineKeyboardMarkup(row_width=3)
+    botones = []
+    for k in keys_muestreo:
+      nombre_an = ANIMALITOS_DICT.get(k, "Animal")
+      botones.append(InlineKeyboardButton(f"{k} - {nombre_an}", callback_data=f"poll_{poll_session}_{k}"))
+    markup.add(*botones)
+
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=nuevo_texto,
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+  except Exception as e:
+    logging.error(f"❌ Error en handle_poll_vote: {e}")
+    bot.answer_callback_query(call.id, text="⚠️ Ocurrió un error al registrar tu voto.", show_alert=True)
 
 
 def limpiar_memoria_diaria():
@@ -565,9 +823,7 @@ def limpiar_memoria_diaria():
   ultima_hora_polla = None
   regalos_hoy = []
   guardar_estado_disco()
-  logging.info(
-      "🧹 Memoria diaria limpiada. La imagen de Cashea se mantiene guardada."
-  )
+  logging.info("🧹 Memoria diaria limpiada. La imagen de Cashea se mantiene guardada.")
 
 
 def enviar_saludo_madrugada():
@@ -920,6 +1176,11 @@ def verificar_resultados():
           continue
         procesados_en_esta_corrida.add(clave_slot)
 
+        # Extraer número y animal limpio
+        num_match = re.search(r"^(\d{1,2})", resultado_final)
+        num_limpio = num_match.group(1) if num_match else "0"
+        animal_nombre = ANIMALITOS_DICT.get(num_limpio, ANIMALITOS_DICT.get(num_limpio.lstrip("0"), "Animal"))
+
         if primera_ejecucion:
           # Registro inicial para evitar spam de resultados pasados al arrancar
           verificar_y_registrar_resultado(
@@ -929,6 +1190,7 @@ def verificar_resultados():
               hora,
               resultado_final,
           )
+          registrar_historial_sorteo(fecha_actual_str, nombre_loteria, hora, num_limpio, animal_nombre)
         else:
           # Verificación y registro atómico centralizado
           if verificar_y_registrar_resultado(
@@ -965,9 +1227,10 @@ def verificar_resultados():
 
             time.sleep(2)
 
-            num_match = re.search(r"^(\d{1,2})", resultado_final)
-            if num_match and regalos_hoy:
-              num_limpio = num_match.group(1)
+            # Analizar eventos especiales (Regalos, Tripleta, Repeticiones x2 y x3+)
+            analizar_eventos_especiales(fecha_actual_str, nombre_loteria, hora, num_limpio, animal_nombre)
+
+            if regalos_hoy:
               for r_num, r_animal in regalos_hoy:
                 if (
                     num_limpio.lstrip("0") == r_num.lstrip("0")
@@ -1099,6 +1362,10 @@ def iniciar_scheduler():
 
   scheduler.add_job(enviar_anuncio_cashea, "cron", hour="9-16", minute=0)
   scheduler.add_job(enviar_anuncio_cashea, "cron", hour=16, minute=30)
+
+  # Programar encuestas 2 veces al día (10:00 AM y 3:00 PM)
+  scheduler.add_job(enviar_encuesta_sorteo, "cron", hour=10, minute=0)
+  scheduler.add_job(enviar_encuesta_sorteo, "cron", hour=15, minute=0)
 
   scheduler.add_job(enviar_aviso_tiempo_cumplido, "cron", hour="7-19", minute=55)
   scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
