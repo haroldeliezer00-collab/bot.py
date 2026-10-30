@@ -105,6 +105,50 @@ ANIMALITOS_DICT = {
     "36": "Culebra",
 }
 
+# Banco de chistes variados y personalizados por animal para repetición x2
+CHISTES_REPETICION = {
+    "12": [
+        "El 12 - Caballo volvió a desbocarse en {loteria}. ¡Parece que le inyectaron nitro hoy! 🐴💨",
+        "¡Se escapó el Caballo otra vez en {loteria}! Guarden las trancas que este animal vino desbocado. 🐎😂",
+    ],
+    "10": [
+        "El 10 - Tigre anda hambriento hoy en {loteria}, repitió de nuevo. ¡Échale carne antes de que se coma la banca! 🐅🥩",
+        "¡Zarandeo de rayitas en {loteria}! El Tigre volvió a salir. ¡Cuidado y te da un susto! 🐯🔥",
+    ],
+    "36": [
+        "¡Cuidado con el piso! La 36 - Culebra volvió a deslizarse y repitió en {loteria}. ¡Ese animal no pica, bota fuego! 🐍⚡",
+        "La Culebra anda suelta por {loteria} y repitió. ¡Reúnan los muchachos que esto se puso picante! 🐍🌀",
+    ],
+    "27": [
+        "El 27 - Perro fiel no abandona la casa. ¡Volvió a salir en {loteria}! 🐕🦴",
+        "¡Guau guau! El Perro repitió en {loteria}. ¡A ese animal hay que ponerle su plato de comida ya! 🐶🐾",
+    ],
+    "0": [
+        "El 0 - Delfín saltó dos veces hoy en {loteria}. ¡Parece que el agua está movidita! 🐬🌊",
+        "¡Chapuzón repetido! El Delfín volvió a salir en {loteria}. ¡Nadando directo a cobrar! 🐬✨",
+    ],
+    "21": [
+        "¡Kikirikí! El 21 - Gallo volvió a cantar temprano en {loteria}. ¡Despierten a los dormidos! 🐓⏰",
+        "El Gallo repitió en {loteria}. ¡Ese animal vino con las pilas puestas desde la madrugada! 🐓🔥",
+    ],
+}
+
+CHISTES_GENERICOS = [
+    "El {num} - {animal} le tomó el gusto a {loteria} y volvió a salir. ¡A ese animal hay que cobrarle alquiler! 🏠😂",
+    "¡Vuelve y juega! El {num} - {animal} repitió en {loteria}. ¡Parece que se copió la tarea del sorteo pasado! 📋🔄",
+    "¡Epa! El {num} - {animal} salió otra vez en {loteria}. ¡Cuidado y se vuelve mañoso hoy! 🎲🔥",
+]
+
+
+def obtener_chiste_repetido(num, animal, loteria):
+  """Devuelve un chiste variado y adaptado al animal que repite."""
+  if num in CHISTES_REPETICION:
+    plantilla = random.choice(CHISTES_REPETICION[num])
+    return plantilla.format(loteria=loteria)
+  else:
+    plantilla = random.choice(CHISTES_GENERICOS)
+    return plantilla.format(num=num, animal=animal, loteria=loteria)
+
 
 def inicializar_db():
   """Inicializa la base de datos SQLite persistente para control de duplicados e historial."""
@@ -193,6 +237,7 @@ def registrar_historial_sorteo(fecha, loteria, hora, num, animal):
   try:
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
+    # Verificamos por fecha exacta para no mezclar días
     cursor.execute(
         """
             SELECT id FROM lottery_history 
@@ -215,13 +260,14 @@ def registrar_historial_sorteo(fecha, loteria, hora, num, animal):
 
 
 def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, animal_nombre):
-  """Analiza repeticiones, tripletas y alertas especiales para un resultado."""
+  """Analiza repeticiones EXCLUSIVAMENTE del día actual, tripletas y alertas."""
   try:
     registrar_historial_sorteo(fecha_str, nombre_loteria, hora, num_limpio, animal_nombre)
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
+    # IMPORTANTE: Contar SOLAMENTE los registros que coincidan con la FECHA DE HOY
     cursor.execute(
         """
             SELECT COUNT(*) FROM lottery_history 
@@ -236,19 +282,21 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
     markup_wa.add(InlineKeyboardButton("📲 ESCRIBENOS AL WHATSAPP", url="https://wa.me/584124489363"))
     markup_dict = markup_wa.to_dict()
 
+    # 2. Control de Repetición 2 veces (Chiste variado rompe-hielo)
     if count_rep == 2:
       id_alerta_2 = f"REP2_{fecha_str}_{normalizar_nombre(nombre_loteria)}_{num_limpio}"
       if verificar_y_registrar_resultado(fecha_str, "ALERTA", nombre_loteria, "REPETIDO_2", id_alerta_2):
+        chiste_personalizado = obtener_chiste_repetido(num_limpio, animal_nombre, nombre_loteria)
         mensaje_chiste = (
-            f"🔄 **¡VUELVE A APARECER!** 🔄\n\n"
-            f"El **{num_limpio} - {animal_nombre}** acaba de repetir en **{nombre_loteria}**. "
-            f"¡A ese animalito le tuvieron que poner pila extra hoy para correr tanto! 🔋😂\n\n"
+            f"🔄 **¡VUELVE A APARECER HOY!** 🔄\n\n"
+            f"{chiste_personalizado}\n\n"
             f"📲 WHATSAPP: 04124489363"
         )
         enviar_telegram_con_botones(mensaje_chiste, markup_dict)
         logging.info(f"[ALERT SENT] Repetición x2 enviada: {nombre_loteria} - {num_limpio}")
         time.sleep(2)
 
+    # 3. Control de Repetición 3+ veces ("Se jodió compadre")
     elif count_rep >= 3:
       id_alerta_3 = f"REP3_{fecha_str}_{normalizar_nombre(nombre_loteria)}_{num_limpio}_{count_rep}"
       if verificar_y_registrar_resultado(fecha_str, "ALERTA", nombre_loteria, f"REPETIDO_{count_rep}", id_alerta_3):
@@ -263,6 +311,7 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
         logging.info(f"[ALERT SENT] Repetición x{count_rep} enviada: {nombre_loteria} - {num_limpio}")
         time.sleep(2)
 
+    # 4. Control de Tripleta (Los 3 regalos en la misma lotería entre 8 AM y 7 PM del día actual)
     ahora_dt = datetime.now()
     if 8 <= ahora_dt.hour < 19 and regalos_hoy and len(regalos_hoy) == 3:
       conn = sqlite3.connect(DB_FILE)
@@ -459,7 +508,7 @@ TEXTO_PUBLICITARIO = (
     "📲 Entra a nuestro canal de Telegram y consulta todos los resultados:\n"
     f"👉 {ENLACE_CANAL}\n"
     "🔥 AGENCIA HAROLD JOSÉ 🔥\n"
-    "💰 JUEGA CON CONFIANZA"
+    "💰 JUEGA CHAZ CON CONFIANZA"
 )
 
 TEXTO_CASHEA = (
