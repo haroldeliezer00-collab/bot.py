@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import logging
 import os
@@ -33,7 +33,7 @@ except Exception as e:
 # Desactivar advertencias de certificados SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Credenciales y canal principal configurado con el nuevo token
+# Credenciales y canal principal configurado con el token actual
 TOKEN = os.environ.get(
     "TELEGRAM_TOKEN", "8733552499:AAFL_86sFP2twwGRF1rIXhGeZPRYcOqW8Go"
 )
@@ -108,7 +108,7 @@ ANIMALITOS_DICT = {
     "36": "Culebra",
 }
 
-# Ordenamiento oficial de las 38 opciones: 0, 00, 1..36
+# Las 38 opciones completas ordenadas: 0, 00, 1 al 36
 TODOS_LOS_ANIMALITOS_KEYS = ["0", "00"] + [str(i) for i in range(1, 37)]
 
 # Banco de chistes variados y personalizados por animal para repetición x2
@@ -157,7 +157,7 @@ def obtener_chiste_repetido(num, animal, loteria):
 
 
 def inicializar_db():
-  """Inicializa la base de datos SQLite persistente para control de duplicados e historial."""
+  """Inicializa la base de datos SQLite persistente para control de duplicados, historial y encuestas."""
   try:
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -180,6 +180,15 @@ def inicializar_db():
                 hora TEXT,
                 num TEXT,
                 animal TEXT
+            )
+        """)
+    cursor.execute("""
+            CREATE TABLE IF NOT EXISTS poll_sessions (
+                poll_session TEXT PRIMARY KEY,
+                loteria TEXT,
+                chat_id TEXT,
+                message_id INTEGER,
+                closed INTEGER DEFAULT 0
             )
         """)
     cursor.execute("""
@@ -264,10 +273,67 @@ def registrar_historial_sorteo(fecha, loteria, hora, num, animal):
     logging.error(f"❌ Error registrando historial de sorteo: {e}")
 
 
+def cerrar_encuesta_si_existe(nombre_loteria, hora_resultado):
+  """Cierra automáticamente la encuesta activa de esta lotería cuando sale el resultado oficial."""
+  try:
+    fecha_str = datetime.now().strftime("%Y-%m-%d")
+    lot_norm = normalizar_nombre(nombre_loteria)
+    
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    # Buscar sesiones abiertas para esta lotería en la fecha actual
+    cursor.execute(
+        """
+        SELECT poll_session, chat_id, message_id FROM poll_sessions 
+        WHERE loteria = ? AND closed = 0 AND poll_session LIKE ?
+        """,
+        (lot_norm, f"{fecha_str}%")
+    )
+    sesiones = cursor.fetchall()
+    
+    for sesion in sesiones:
+      poll_session, chat_id, message_id = sesion
+      
+      # Marcar como cerrada en BD
+      cursor.execute("UPDATE poll_sessions SET closed = 1 WHERE poll_session = ?", (poll_session,))
+      conn.commit()
+      
+      # Obtener votos finales registrados
+      cursor.execute("SELECT user_name, num, animal FROM poll_votes WHERE poll_session = ?", (poll_session,))
+      votos_finales = cursor.fetchall()
+      
+      lista_votos_str = "\n".join([f"• {v[0]}: **{v[1]} - {v[2]}**" for v in votos_finales]) if votos_finales else "(Sin votos registrados)"
+      
+      texto_cerrado = (
+          f"🔒 **¡ENCUESTA CERRADA!** ❌\n"
+          f"🎰 **LOTERÍA:** {nombre_loteria} ({hora_resultado})\n"
+          f"🏁 *¡El resultado oficial ya ha salido! Votación finalizada.*\n\n"
+          f"🏆 **Selecciones realizadas:**\n{lista_votos_str}"
+      )
+      
+      # Editar mensaje en Telegram eliminando los botones interactivos
+      url_edit = f"https://api.telegram.org/bot{TOKEN}/editMessageText"
+      payload = {
+          "chat_id": chat_id,
+          "message_id": message_id,
+          "text": texto_cerrado,
+          "parse_mode": "Markdown"
+      }
+      http_session.post(url_edit, json=payload, timeout=10)
+      logging.info(f"🔒 Encuesta cerrada exitosamente para {nombre_loteria} ({hora_resultado})")
+      
+    conn.close()
+  except Exception as e:
+    logging.error(f"❌ Error cerrando encuesta: {e}")
+
+
 def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, animal_nombre):
-  """Analiza repeticiones EXCLUSIVAMENTE del día actual, tripletas y alertas."""
+  """Analiza repeticiones del día actual, tripletas y cierra la encuesta de la lotería correspondiente."""
   try:
     registrar_historial_sorteo(fecha_str, nombre_loteria, hora, num_limpio, animal_nombre)
+
+    # Cerrar automáticamente la encuesta de esta lotería al salir el resultado
+    cerrar_encuesta_si_existe(nombre_loteria, hora)
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -512,7 +578,7 @@ TEXTO_PUBLICITARIO = (
     "📲 Entra a nuestro canal de Telegram y consulta todos los resultados:\n"
     f"👉 {ENLACE_CANAL}\n"
     "🔥 AGENCIA HAROLD JOSÉ 🔥\n"
-    "💰 JUEGA CHAZ CON CONFIANZA"
+    "💰 JUEGA CON CONFIANZA"
 )
 
 TEXTO_CASHEA = (
@@ -559,13 +625,12 @@ def home():
       " Saludo Matutino (7:00 AM)</a><br>👉 <a href='/test/publicidad'>Probar"
       " Aviso Publicitario (7am/3pm/6pm)</a><br>👉 <a"
       " href='/test/cashea'>Probar Aviso con Botones Cashea (9am a 4:30"
-      " pm)</a><br>👉 <a href='/test/tiempocumplido'>Probar Tiempo Cumplido"
-      " (Minuto 55)</a><br>👉 <a href='/test/bcv'>Probar Tasa Oficial"
+      " pm)</a><br>👉 <a href='/test/tiempocumplido'>Probar Tiempo Cumplido + Encuesta</a><br>👉 <a href='/test/bcv'>Probar Tasa Oficial"
       " BCV</a><br>👉 <a href='/test/taquilla_manual'>Probar Envío Manual de"
       " Taquilla Activa</a><br>👉 <a href='/test/pollas'>Probar Aviso de Pollas"
       " (Minuto 10)</a><br>👉 <a href='/test/resultados'>Forzar Revisión de"
       " Resultados Individuales</a><br>👉 <a href='/test/cierre'>Probar Mensaje"
-      " de Cierre (9:10 PM)</a><br>👉 <a href='/test/encuesta'>Probar Encuesta Interactiva (38 Animales)</a>"
+      " de Cierre (9:10 PM)</a><br>👉 <a href='/test/encuesta'>Probar Encuesta Interactiva Manual</a>"
   )
 
 
@@ -618,8 +683,8 @@ def test_cashea():
 
 @app.route("/test/tiempocumplido")
 def test_tiempocumplido():
-  enviar_aviso_tiempo_cumplido()
-  return "Prueba de Aviso de Tiempo Cumplido ejecutada."
+  enviar_aviso_tiempo_cumplido_y_encuesta()
+  return "Prueba de Tiempo Cumplido + Encuesta ejecutada."
 
 
 @app.route("/test/bcv")
@@ -661,7 +726,7 @@ def test_cierre():
 @app.route("/test/encuesta")
 def test_encuesta():
   enviar_encuesta_sorteo()
-  return "Prueba de Encuesta Interactiva con 38 opciones ejecutada."
+  return "Prueba de Encuesta Interactiva ejecutada."
 
 
 def limpiar_texto(texto):
@@ -736,7 +801,7 @@ def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
     if response.status_code != 200:
       logging.warning(f"⚠️ Error al enviar foto con botones al canal: {response.text}")
   except Exception as e:
-    logging.warning(f"⚠️ Excepción al enviar foto con botones: {e}")
+      logging.warning(f"⚠️ Excepción al enviar foto con botones: {e}")
 
 
 def construir_teclado_38_animalitos(poll_session):
@@ -750,19 +815,23 @@ def construir_teclado_38_animalitos(poll_session):
   return markup
 
 
-# --- SISTEMA DE ENCUESTAS INTERACTIVAS ROTATIVAS POR LOTERÍA ---
+# --- SISTEMA DE ENCUESTAS INTERACTIVAS ROTATIVAS ---
 def enviar_encuesta_sorteo():
-  """Envía la encuesta rotativa entre Lotto Activo, La Granjita y Selva Plus con los 38 animales."""
+  """Envía la encuesta rotativa con las 38 opciones inmediatamente tras el cierre de jugada."""
   global indice_loteria_encuesta
   try:
     ahora = datetime.now()
     fecha_str = ahora.strftime("%Y-%m-%d")
     
+    # Calcular hora del sorteo próximo (ej: si son las 14:55, el sorteo es a las 15:00)
+    hora_sorteo_dt = ahora.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    hora_sorteo_str = hora_sorteo_dt.strftime("%I:%M %p").lstrip("0")
+    
     # Lotería rotativa actual
     loteria_actual = LOTERIAS_ENCUESTA[indice_loteria_encuesta % len(LOTERIAS_ENCUESTA)]
-    poll_session = f"{fecha_str}_{indice_loteria_encuesta}"
+    poll_session = f"{fecha_str}_{hora_sorteo_dt.strftime('%H%M')}_{normalizar_nombre(loteria_actual)}"
 
-    # Avanzar el índice de lotería para la siguiente encuesta y guardar estado
+    # Avanzar índice para la próxima rotación y guardar estado
     indice_loteria_encuesta += 1
     guardar_estado_disco()
 
@@ -771,9 +840,9 @@ def enviar_encuesta_sorteo():
 
     texto_encuesta = (
         f"📊 **¡ENCUESTA DE LA SUERTE!** 🎲\n"
-        f"🎰 **LOTERÍA:** {loteria_actual}\n\n"
-        f"¿Cuál animalito crees que saldrá en el próximo sorteo de **{loteria_actual}**?\n"
-        f"👇 *Toca un botón para elegir tu animal.* ¡Cada opción es **única**! Una vez que alguien la elige, queda bloqueada para los demás. ¡Solo 1 voto por persona!\n\n"
+        f"🎰 **LOTERÍA:** {loteria_actual} ({hora_sorteo_str})\n\n"
+        f"¿Cuál animalito crees que saldrá en el sorteo de las **{hora_sorteo_str}** de **{loteria_actual}**?\n"
+        f"👇 *Toca un botón para elegir tu animal.* ¡Cada opción es **única** y se bloquea al ser elegida! ¡Solo 1 voto por persona!\n\n"
         f"🏆 **Selecciones actuales:** (Nadie ha votado aún)"
     )
 
@@ -787,7 +856,22 @@ def enviar_encuesta_sorteo():
     }
     response = http_session.post(url, json=payload, timeout=10)
     if response.status_code == 200:
-      logging.info(f"✅ Encuesta enviada para {loteria_actual} (Sesión {poll_session})")
+      res_json = response.json()
+      message_id = res_json.get("result", {}).get("message_id")
+      
+      # Registrar sesión activa en la base de datos
+      conn = sqlite3.connect(DB_FILE)
+      cursor = conn.cursor()
+      cursor.execute(
+          """
+          INSERT OR REPLACE INTO poll_sessions (poll_session, loteria, chat_id, message_id, closed)
+          VALUES (?, ?, ?, ?, 0)
+          """,
+          (poll_session, normalizar_nombre(loteria_actual), str(CANAL), message_id)
+      )
+      conn.commit()
+      conn.close()
+      logging.info(f"✅ Encuesta enviada para {loteria_actual} ({hora_sorteo_str}) - Sesión {poll_session}")
     else:
       logging.warning(f"⚠️ Error enviando encuesta: {response.text}")
   except Exception as e:
@@ -800,8 +884,8 @@ def handle_poll_vote(call):
     partes = call.data.split("_")
     if len(partes) < 3:
       return
-    poll_session = partes[1]
-    num_elegido = partes[2]
+    poll_session = "_".join(partes[1:-1]) # Soporte seguro para el nombre de sesión
+    num_elegido = partes[-1]
     user_id = call.from_user.id
     user_name = call.from_user.first_name or "Usuario"
     animal_nombre = ANIMALITOS_DICT.get(num_elegido, "Animal")
@@ -809,7 +893,15 @@ def handle_poll_vote(call):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    # 1. Verificar si el usuario ya votó en esta encuesta
+    # 1. Verificar si la encuesta ya está cerrada
+    cursor.execute("SELECT closed FROM poll_sessions WHERE poll_session = ?", (poll_session,))
+    row_closed = cursor.fetchone()
+    if row_closed and row_closed[0] == 1:
+      conn.close()
+      bot.answer_callback_query(call.id, text="❌ Esta encuesta ya está cerrada porque el resultado oficial ya salió.", show_alert=True)
+      return
+
+    # 2. Verificar si el usuario ya votó en esta encuesta
     cursor.execute("SELECT num, animal FROM poll_votes WHERE poll_session = ? AND user_id = ?", (poll_session, user_id))
     user_vote = cursor.fetchone()
     if user_vote:
@@ -817,7 +909,7 @@ def handle_poll_vote(call):
       bot.answer_callback_query(call.id, text=f"❌ Ya elegiste el {user_vote[0]} - {user_vote[1]} en esta encuesta.", show_alert=True)
       return
 
-    # 2. Verificar si el animal ya fue tomado por otra persona
+    # 3. Verificar si el animal ya fue tomado por otra persona
     cursor.execute("SELECT user_name FROM poll_votes WHERE poll_session = ? AND num = ?", (poll_session, num_elegido))
     animal_taken = cursor.fetchone()
     if animal_taken:
@@ -825,7 +917,7 @@ def handle_poll_vote(call):
       bot.answer_callback_query(call.id, text=f"❌ ¡El {num_elegido} - {animal_nombre} ya fue elegido por {animal_taken[0]}! Elige otro.", show_alert=True)
       return
 
-    # 3. Registrar el voto
+    # 4. Registrar el voto
     cursor.execute(
         "INSERT INTO poll_votes (fecha, poll_session, user_id, user_name, num, animal) VALUES (?, ?, ?, ?, ?, ?)",
         (datetime.now().strftime("%Y-%m-%d"), poll_session, user_id, user_name, num_elegido, animal_nombre)
@@ -840,7 +932,6 @@ def handle_poll_vote(call):
 
     lista_votos_str = "\n".join([f"• {v[0]}: **{v[1]} - {v[2]}**" for v in votos_actuales])
     
-    # Extraer el texto actual para conservar la lotería correspondiente
     texto_orig = call.message.text or ""
     lineas_orig = texto_orig.split("\n")
     loteria_linea = lineas_orig[1] if len(lineas_orig) > 1 else "🎰 **LOTERÍA:** PRÓXIMO SORTEO"
@@ -1046,13 +1137,16 @@ def enviar_anuncio_cashea():
     enviar_telegram_con_botones(TEXTO_CASHEA, markup_dict)
 
 
-def enviar_aviso_tiempo_cumplido():
+def enviar_aviso_tiempo_cumplido_y_encuesta():
+  """Envía el aviso de tiempo cumplido al minuto 55 e inmediatamente lanza la encuesta rotativa."""
   enviar_telegram(
       "⏰ ¡Tiempo cumplido! Han finalizado las jugadas para este sorteo en la"
       " AGENCIA HAROLD JOSÉ. ¡Muy atentos a los resultados y que la suerte esté"
       " de tu lado! 🍀✨",
       disable_web_preview=True,
   )
+  time.sleep(1)
+  enviar_encuesta_sorteo()
 
 
 def enviar_tasa_dolar():
@@ -1412,11 +1506,9 @@ def iniciar_scheduler():
   scheduler.add_job(enviar_anuncio_cashea, "cron", hour="9-16", minute=0)
   scheduler.add_job(enviar_anuncio_cashea, "cron", hour=16, minute=30)
 
-  # Encuestas interactivas de la suerte a las 10:00 AM y 3:00 PM
-  scheduler.add_job(enviar_encuesta_sorteo, "cron", hour=10, minute=0)
-  scheduler.add_job(enviar_encuesta_sorteo, "cron", hour=15, minute=0)
+  # Al minuto 55 de cada hora (7 AM a 7 PM), avisa tiempo cumplido y lanza la encuesta rotativa
+  scheduler.add_job(enviar_aviso_tiempo_cumplido_y_encuesta, "cron", hour="7-19", minute=55)
 
-  scheduler.add_job(enviar_aviso_tiempo_cumplido, "cron", hour="7-19", minute=55)
   scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
   scheduler.add_job(tarea_minuto_diez, "cron", hour="7-17", minute=10)
   scheduler.add_job(enviar_mensaje_cierre, "cron", hour=21, minute=10)
