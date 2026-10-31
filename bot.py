@@ -281,7 +281,6 @@ def cerrar_encuesta_si_existe(nombre_loteria, hora_resultado):
     
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Buscar sesiones abiertas para esta lotería en la fecha actual
     cursor.execute(
         """
         SELECT poll_session, chat_id, message_id FROM poll_sessions 
@@ -294,11 +293,9 @@ def cerrar_encuesta_si_existe(nombre_loteria, hora_resultado):
     for sesion in sesiones:
       poll_session, chat_id, message_id = sesion
       
-      # Marcar como cerrada en BD
       cursor.execute("UPDATE poll_sessions SET closed = 1 WHERE poll_session = ?", (poll_session,))
       conn.commit()
       
-      # Obtener votos finales registrados
       cursor.execute("SELECT user_name, num, animal FROM poll_votes WHERE poll_session = ?", (poll_session,))
       votos_finales = cursor.fetchall()
       
@@ -311,7 +308,6 @@ def cerrar_encuesta_si_existe(nombre_loteria, hora_resultado):
           f"🏆 **Selecciones realizadas:**\n{lista_votos_str}"
       )
       
-      # Editar mensaje en Telegram eliminando los botones interactivos
       url_edit = f"https://api.telegram.org/bot{TOKEN}/editMessageText"
       payload = {
           "chat_id": chat_id,
@@ -331,8 +327,6 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
   """Analiza repeticiones del día actual, tripletas y cierra la encuesta de la lotería correspondiente."""
   try:
     registrar_historial_sorteo(fecha_str, nombre_loteria, hora, num_limpio, animal_nombre)
-
-    # Cerrar automáticamente la encuesta de esta lotería al salir el resultado
     cerrar_encuesta_si_existe(nombre_loteria, hora)
 
     conn = sqlite3.connect(DB_FILE)
@@ -823,15 +817,12 @@ def enviar_encuesta_sorteo():
     ahora = datetime.now()
     fecha_str = ahora.strftime("%Y-%m-%d")
     
-    # Calcular hora del sorteo próximo (ej: si son las 14:55, el sorteo es a las 15:00)
     hora_sorteo_dt = ahora.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     hora_sorteo_str = hora_sorteo_dt.strftime("%I:%M %p").lstrip("0")
     
-    # Lotería rotativa actual
     loteria_actual = LOTERIAS_ENCUESTA[indice_loteria_encuesta % len(LOTERIAS_ENCUESTA)]
     poll_session = f"{fecha_str}_{hora_sorteo_dt.strftime('%H%M')}_{normalizar_nombre(loteria_actual)}"
 
-    # Avanzar índice para la próxima rotación y guardar estado
     indice_loteria_encuesta += 1
     guardar_estado_disco()
 
@@ -859,7 +850,6 @@ def enviar_encuesta_sorteo():
       res_json = response.json()
       message_id = res_json.get("result", {}).get("message_id")
       
-      # Registrar sesión activa en la base de datos
       conn = sqlite3.connect(DB_FILE)
       cursor = conn.cursor()
       cursor.execute(
@@ -884,7 +874,7 @@ def handle_poll_vote(call):
     partes = call.data.split("_")
     if len(partes) < 3:
       return
-    poll_session = "_".join(partes[1:-1]) # Soporte seguro para el nombre de sesión
+    poll_session = "_".join(partes[1:-1])
     num_elegido = partes[-1]
     user_id = call.from_user.id
     user_name = call.from_user.first_name or "Usuario"
@@ -893,7 +883,6 @@ def handle_poll_vote(call):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    # 1. Verificar si la encuesta ya está cerrada
     cursor.execute("SELECT closed FROM poll_sessions WHERE poll_session = ?", (poll_session,))
     row_closed = cursor.fetchone()
     if row_closed and row_closed[0] == 1:
@@ -901,7 +890,6 @@ def handle_poll_vote(call):
       bot.answer_callback_query(call.id, text="❌ Esta encuesta ya está cerrada porque el resultado oficial ya salió.", show_alert=True)
       return
 
-    # 2. Verificar si el usuario ya votó en esta encuesta
     cursor.execute("SELECT num, animal FROM poll_votes WHERE poll_session = ? AND user_id = ?", (poll_session, user_id))
     user_vote = cursor.fetchone()
     if user_vote:
@@ -909,7 +897,6 @@ def handle_poll_vote(call):
       bot.answer_callback_query(call.id, text=f"❌ Ya elegiste el {user_vote[0]} - {user_vote[1]} en esta encuesta.", show_alert=True)
       return
 
-    # 3. Verificar si el animal ya fue tomado por otra persona
     cursor.execute("SELECT user_name FROM poll_votes WHERE poll_session = ? AND num = ?", (poll_session, num_elegido))
     animal_taken = cursor.fetchone()
     if animal_taken:
@@ -917,7 +904,6 @@ def handle_poll_vote(call):
       bot.answer_callback_query(call.id, text=f"❌ ¡El {num_elegido} - {animal_nombre} ya fue elegido por {animal_taken[0]}! Elige otro.", show_alert=True)
       return
 
-    # 4. Registrar el voto
     cursor.execute(
         "INSERT INTO poll_votes (fecha, poll_session, user_id, user_name, num, animal) VALUES (?, ?, ?, ?, ?, ?)",
         (datetime.now().strftime("%Y-%m-%d"), poll_session, user_id, user_name, num_elegido, animal_nombre)
@@ -1208,7 +1194,7 @@ def tarea_minuto_diez():
       guardar_estado_disco()
       enviar_telegram(
           "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n📢 ¡Pollas actualizadas!\nPuedes verlas"
-          f" hier 👇🏻\n{ENLACE_POLLAS}\n\n¡Mucho éxito! 🍀",
+          f" aquí 👇🏻\n{ENLACE_POLLAS}\n\n¡Mucho éxito! 🍀",
           disable_web_preview=False,
       )
 
@@ -1449,45 +1435,11 @@ def procesar_mensajes_privados(message):
       )
 
 
-@bot.message_handler(content_types=["photo"])
-def handle_photos(message):
+# 🚫 RESTRINGIR RECEPTOR: Únicamente escucha mensajes privados del administrador.
+# Se eliminaron los manejadores de canal para evitar bucles de eco o spam.
+@bot.message_handler(func=lambda message: message.chat.type == "private", content_types=["photo", "text"])
+def handle_private_messages(message):
   procesar_mensajes_privados(message)
-
-
-@bot.channel_post_handler(content_types=["photo"])
-def handle_channel_posts_photos(message):
-  procesar_mensajes_privados(message)
-
-
-@bot.message_handler(func=lambda msg: True, content_types=["text"])
-def handle_text_messages(message):
-  procesar_mensajes_privados(message)
-
-
-def procesar_limpieza_y_envio_animalitos(text):
-  texto_lower = text.lower()
-  if (
-      "resultado programado" in texto_lower
-      or "resultados animalitos" in texto_lower
-  ):
-    clave_corte = (
-        "resultados animalitos"
-        if "resultados animalitos" in texto_lower
-        else "resultado programado"
-    )
-    pos = texto_lower.find(clave_corte)
-    texto_limpio = text[pos:].strip()
-    mensaje_completo = f"{HEADER_RESULTADOS}\n\n{texto_limpio}"
-    enviar_telegram(mensaje_completo, disable_web_preview=True)
-    logging.info("✅ Mensaje programado / animalitos enviado con éxito.")
-    return True
-  return False
-
-
-@bot.channel_post_handler(func=lambda message: True)
-def handle_channel_posts(message):
-  text = message.text or message.caption or ""
-  procesar_limpieza_y_envio_animalitos(text)
 
 
 def iniciar_scheduler():
