@@ -1428,7 +1428,7 @@ def verificar_resultados():
     traceback.print_exc()
 
 
-# 🛠️ MEJORA CRUCIAL: Capturar fotos tanto en chat privado COMO en cualquier chat donde esté el bot para guardar Cashea de inmediato
+# 🛠️ RECEPTOR MULTICANAL: Atrapa tanto mensajes normales como posts de canal
 def procesar_mensajes_multicanal(message):
   global taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id
   caption = message.caption or message.text or ""
@@ -1467,6 +1467,11 @@ def procesar_mensajes_multicanal(message):
         )
       except Exception:
         pass
+
+
+@bot.channel_post_handler(content_types=["photo", "text"])
+def handle_channel_posts(message):
+  procesar_mensajes_multicanal(message)
 
 
 @bot.message_handler(content_types=["photo", "text"])
