@@ -96,7 +96,7 @@ CHISTES_REPETICION = {
     ],
     "10": [
         "El 10 - Tigre anda hambriento hoy en {loteria}, repitió de nuevo. ¡Échale carne antes de que se coma la banca! 🐅🥩",
-        "¡Zarandeo de rayitas en {loteria}! El Tigre volvió a salir. ¡Cuidado y te da un susto! 🐯🔥",
+        "¡Zarandeo de rayitas en {loteria}! El Tigre voltou a salir. ¡Cuidado y te da un susto! 🐯🔥",
     ],
     "36": [
         "¡Cuidado con el piso! La 36 - Culebra volvió a deslizarse y repitió en {loteria}. ¡Ese animal no pica, bota fuego! 🐍⚡",
@@ -1099,7 +1099,7 @@ def generar_piramide():
       f"📅 Fecha: {fecha_str}\nAnálisis matemático actualizado y listo para"
       f" la jugada. ¡A asegurar posición:\n\n{cuerpo_piramide}\n\n📊 SUMA POR"
       f" FILA:\n{bloque_sumas}\n\n🔥 DATOS CLAVES PARA HOY:\n📌"
-      f" {d1}\n📌 {d2}\n\n⚡ 🙏 ¡La precisión y los números hablan por sí"
+      f" {d1}\n📌 {d2}\n\n⚡ ¡La precisión y los números hablan por sí"
       " solos! ¡Juega con confianza y gana con nosotros! 🍀 💰"
   )
 
@@ -1367,7 +1367,8 @@ def verificar_resultados():
 
         resultado_final = limpiar_texto(match_res.group(1)).upper()
 
-        clave_slot = (normalizar_nombre(nombre_loteria), hora)
+        # 🛡️ FILTRO ESTRICTO ANTI-DUPLICADOS EN LA MISMA CORRIDA DE SCRAPING
+        clave_slot = (normalizar_nombre(nombre_loteria), hora, normalizar_nombre(resultado_final))
         if clave_slot in procesados_en_esta_corrida:
           continue
         procesados_en_esta_corrida.add(clave_slot)
@@ -1553,7 +1554,7 @@ def configurar_webhook():
     except Exception as e:
       logging.error(f"❌ Error configurando el webhook: {e}")
   else:
-      logging.warning("⚠️ RENDER_EXTERNAL_URL no está definido.")
+    logging.warning("⚠️ RENDER_EXTERNAL_URL no está definido.")
 
 
 if __name__ == "__main__":
