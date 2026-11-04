@@ -52,6 +52,9 @@ DB_FILE = "bot_results.db"
 # Cerrojo atómico para operaciones de base de datos y evitar condiciones de carrera
 db_lock = Lock()
 
+# Memoria temporal RAM ultrarrápida anti-spam (Guarda la firma y timestamp del envío)
+memoria_envios_recientes = {}
+
 # Sesión HTTP optimizada para reuso de conexiones
 http_session = requests.Session()
 http_session.headers.update(
@@ -207,6 +210,13 @@ def verificar_y_registrar_resultado(fecha, agencia, loteria, hora, resultado):
 
   result_id = f"{f_norm}_{ag_norm}_{lot_norm}_{h_norm}_{res_norm}"
 
+  # 🛡️ CAPA 1: Revisión inmediata en memoria RAM anti-spam
+  tiempo_actual = time.time()
+  if result_id in memoria_envios_recientes:
+    if tiempo_actual - memoria_envios_recientes[result_id] < 180: # Bloqueo por 3 minutos
+      logging.info(f"[RAM SPAM BLOCKED] Resultado bloqueado por memoria RAM: {result_id}")
+      return False
+
   with db_lock:
     try:
       conn = obtener_conexion_db()
@@ -221,10 +231,12 @@ def verificar_y_registrar_resultado(fecha, agencia, loteria, hora, resultado):
       conn.commit()
 
       if cursor.rowcount > 0:
+        memoria_envios_recientes[result_id] = tiempo_actual
         logging.info(f"[NEW RESULT] Resultado nuevo detectado: {lot_norm} | {h_norm} | {res_norm} (ID: {result_id})")
         return True
       else:
-        logging.info(f"[DUPLICATE IGNORED] Resultado duplicado descartado: {lot_norm} | {h_norm} | {res_norm} (ID: {result_id})")
+        memoria_envios_recientes[result_id] = tiempo_actual
+        logging.info(f"[DUPLICATE IGNORED] Resultado duplicado descartado en DB: {lot_norm} | {h_norm} | {res_norm} (ID: {result_id})")
         return False
     except Exception as e:
       logging.error(f"[RESULT ERROR] Error en base de datos SQLite: {e}")
@@ -612,7 +624,7 @@ TEXTO_PUBLICITARIO = (
     "📲 Entra a nuestro canal de Telegram y consulta todos los resultados:\n"
     f"👉 {ENLACE_CANAL}\n"
     "🔥 AGENCIA HAROLD JOSÉ 🔥\n"
-    "💰 JUEGA CON CONFIANZA"
+    "💰 JUEGA COM CONFIANZA"
 )
 
 TEXTO_CASHEA = (
@@ -1368,7 +1380,7 @@ def verificar_resultados():
         resultado_final = limpiar_texto(match_res.group(1)).upper()
 
         # 🛡️ FILTRO ESTRICTO ANTI-DUPLICADOS EN LA MISMA CORRIDA DE SCRAPING
-        clave_slot = (normalizar_nombre(nombre_loteria), hora, normalizar_nombre(resultado_final))
+        clave_slot = (normalizar_nombre(nombre_loteria), hora)
         if clave_slot in procesados_en_esta_corrida:
           continue
         procesados_en_esta_corrida.add(clave_slot)
@@ -1379,7 +1391,7 @@ def verificar_resultados():
 
         if primera_ejecucion:
           # Registramos en sent_results para que el bot no los mande repetidos al canal,
-          # pero OMITIMOS registrar_historial_sorteo para que los datos de ayer no afecten el día de hoy.
+          # but OMITIMOS registrar_historial_sorteo para que los datos de ayer no afecten el día de hoy.
           verificar_y_registrar_resultado(
               fecha_actual_str,
               agencia_nombre,
