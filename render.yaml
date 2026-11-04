@@ -1,18 +1,13 @@
 services:
   - type: web
-    name: ag-harold-jose-bot
-    runtime: python
-    plan: free
+    name: bot-agencia-haroldjose
+    env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: gunicorn bot:app --bind 0.0.0.0:$PORT --workers 1 --threads 4
     envVars:
-      - key: BOT_TOKEN
+      - key: TELEGRAM_TOKEN
         sync: false
-      - key: ACTIVE_CHANNEL_ID
-        value: "@pruebajsj"
-      - key: TEST_CHANNEL_ID
-        value: "@pruebajsj"
-      - key: MAIN_CHANNEL_REFERENCE
-        value: "@AGHAROLDJOSE_BOT"
-      - key: TIMEZONE
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: TZ
         value: "America/Caracas"
