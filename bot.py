@@ -1270,6 +1270,10 @@ def verificar_resultados():
     agencia_nombre = "AGENCIA HAROLD JOSÉ"
     procesados_en_esta_corrida = set()
 
+    # Obtener hora actual del sistema para filtros de franja horaria
+    ahora_dt = datetime.now()
+    hora_actual_num = ahora_dt.hour
+
     for tarjeta in tarjetas:
       texto_completo_tarjeta = tarjeta.get_text(" ", strip=True).upper()
 
@@ -1327,6 +1331,11 @@ def verificar_resultados():
           continue
         hora = limpiar_texto(match_h.group(1)).upper()
 
+        # 🛡️ FILTRO ANTI-REPETICIÓN NOCTURNA: Si ya pasaron las 6:00 PM (18:00),
+        # ignorar por completo cualquier sorteo de la mañana (AM) que la web mantenga colgado.
+        if hora_actual_num >= 18 and "AM" in hora:
+          continue
+
         match_res = re.search(
             r"(\d{1,2}\s-\s[A-ZÁÉÍÓÚÑa-zñáéíóú]+(?:\s+[A-ZÁÉÍÓÚÑa-zñáéíóú]+)?)",
             texto_slot,
@@ -1346,6 +1355,8 @@ def verificar_resultados():
         animal_nombre = ANIMALITOS_EXTENDIDOS_DICT.get(num_limpio, ANIMALITOS_EXTENDIDOS_DICT.get(num_limpio.lstrip("0"), "Animal"))
 
         if primera_ejecucion:
+          # Registramos en sent_results para que el bot no los mande repetidos al canal,
+          # pero OMITIMOS registrar_historial_sorteo para que los datos de ayer no afecten el día de hoy.
           verificar_y_registrar_resultado(
               fecha_actual_str,
               agencia_nombre,
@@ -1353,7 +1364,6 @@ def verificar_resultados():
               hora,
               resultado_final,
           )
-          registrar_historial_sorteo(fecha_actual_str, nombre_loteria, hora, num_limpio, animal_nombre)
         else:
           if verificar_y_registrar_resultado(
               fecha_actual_str,
