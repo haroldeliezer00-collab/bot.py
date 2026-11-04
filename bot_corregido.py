@@ -1,14 +1,12 @@
 from datetime import datetime, timedelta
 import json
-import hashlib
 import logging
 import os
 import random
 import re
-from threading import Thread, Lock
+from threading import Lock, Thread
 import time
 import traceback
-from contextlib import contextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
 from flask import Flask, request
@@ -49,7 +47,10 @@ scheduler = BackgroundScheduler(timezone="America/Caracas")
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
 STATE_FILE = "bot_state.json"
-DB_FILE = os.environ.get("DB_FILE", "bot_results.db")
+DB_FILE = "bot_results.db"
+
+# Cerrojo atómico para operaciones de base de datos y evitar condiciones de carrera
+db_lock = Lock()
 
 # Sesión HTTP optimizada para reuso de conexiones
 http_session = requests.Session()
@@ -59,7 +60,6 @@ http_session.headers.update(
 
 # Control estricto anti-duplicados y memoria
 primera_ejecucion = True
-resultado_lock = Lock()
 ultima_hora_polla = None
 
 taquilla_activa_hoy = False
@@ -123,6 +123,14 @@ CHISTES_GENERICOS = [
 ]
 
 
+def obtener_conexion_db():
+  """Crea una conexión SQLite segura con modo WAL activado para alta concurrencia."""
+  conn = sqlite3.connect(DB_FILE, timeout=10.0)
+  conn.execute("PRAGMA journal_mode=WAL;")
+  conn.execute("PRAGMA busy_timeout = 5000;")
+  return conn
+
+
 def obtener_chiste_repetido(num, animal, loteria):
   """Devuelve un chiste variado y adaptado al animal que repite."""
   if num in CHISTES_REPETICION:
@@ -133,312 +141,223 @@ def obtener_chiste_repetido(num, animal, loteria):
     return plantilla.format(num=num, animal=animal, loteria=loteria)
 
 
-def conectar_db():
-  """Abre SQLite con espera ante bloqueos y configuración segura."""
-  conn = sqlite3.connect(DB_FILE, timeout=30)
-  conn.execute("PRAGMA busy_timeout = 30000")
-  conn.execute("PRAGMA journal_mode = WAL")
-  conn.execute("PRAGMA synchronous = FULL")
-  return conn
-
-
-
-
-@contextmanager
-def db_session():
-  """Contexto transaccional que siempre confirma/ revierte y cierra SQLite."""
-  conn = conectar_db()
-  try:
-    yield conn
-    conn.commit()
-  except Exception:
-    conn.rollback()
-    raise
-  finally:
-    conn.close()
-
-
 def inicializar_db():
-  """Inicializa las tablas y migra el control de resultados sin borrar historial."""
-  try:
-    with db_session() as conn:
+  """Inicializa la base de datos SQLite persistente para control de duplicados, historial y encuestas."""
+  with db_lock:
+    try:
+      conn = obtener_conexion_db()
       cursor = conn.cursor()
       cursor.execute("""
-          CREATE TABLE IF NOT EXISTS sent_results (
-              result_id TEXT PRIMARY KEY,
-              fecha TEXT,
-              agencia TEXT,
-              loteria TEXT,
-              hora TEXT,
-              resultado TEXT,
-              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-          )
-      """)
-      # Las filas preexistentes se consideran ya procesadas para no republicarlas
-      # durante la primera actualización que incorpore este mecanismo.
-      columnas = {row[1] for row in cursor.execute("PRAGMA table_info(sent_results)")}
-      if "status" not in columnas:
-        cursor.execute(
-            "ALTER TABLE sent_results ADD COLUMN status TEXT NOT NULL DEFAULT 'sent'"
-        )
-      if "updated_at" not in columnas:
-        cursor.execute("ALTER TABLE sent_results ADD COLUMN updated_at TEXT")
-        cursor.execute(
-            "UPDATE sent_results SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP)"
-        )
-
+              CREATE TABLE IF NOT EXISTS sent_results (
+                  result_id TEXT PRIMARY KEY,
+                  fecha TEXT,
+                  agencia TEXT,
+                  loteria TEXT,
+                  hora TEXT,
+                  resultado TEXT,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+              )
+          """)
       cursor.execute("""
-          CREATE TABLE IF NOT EXISTS lottery_history (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              fecha TEXT,
-              loteria TEXT,
-              hora TEXT,
-              num TEXT,
-              animal TEXT
-          )
-      """)
+              CREATE TABLE IF NOT EXISTS lottery_history (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  fecha TEXT,
+                  loteria TEXT,
+                  hora TEXT,
+                  num TEXT,
+                  animal TEXT
+              )
+          """)
       cursor.execute("""
-          CREATE TABLE IF NOT EXISTS poll_sessions (
-              poll_session TEXT PRIMARY KEY,
-              loteria TEXT,
-              chat_id TEXT,
-              message_id INTEGER,
-              closed INTEGER DEFAULT 0
-          )
-      """)
+              CREATE TABLE IF NOT EXISTS poll_sessions (
+                  poll_session TEXT PRIMARY KEY,
+                  loteria TEXT,
+                  chat_id TEXT,
+                  message_id INTEGER,
+                  closed INTEGER DEFAULT 0
+              )
+          """)
       cursor.execute("""
-          CREATE TABLE IF NOT EXISTS poll_votes (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              fecha TEXT,
-              poll_session TEXT,
-              user_id INTEGER,
-              user_name TEXT,
-              num TEXT,
-              animal TEXT,
-              UNIQUE(poll_session, user_id),
-              UNIQUE(poll_session, num)
-          )
-      """)
-      cursor.execute(
-          "CREATE INDEX IF NOT EXISTS idx_history_lookup "
-          "ON lottery_history(fecha, loteria, num)"
-      )
-    logging.info("🗄️ Base de datos SQLite inicializada y migrada correctamente.")
-  except Exception:
-    logging.exception("❌ Error inicializando la base de datos SQLite.")
-    raise
-
-
-def construir_id_resultado(fecha, agencia, loteria, hora, resultado):
-  """Genera una clave estable, independiente del orden de ejecución."""
-  partes = (
-      limpiar_texto(str(fecha)).upper(),
-      normalizar_nombre(str(agencia)),
-      normalizar_nombre(str(loteria)),
-      limpiar_texto(str(hora)).upper(),
-      limpiar_texto(str(resultado)).upper(),
-  )
-  contenido = "|".join(partes)
-  return hashlib.sha256(contenido.encode("utf-8")).hexdigest(), partes
+              CREATE TABLE IF NOT EXISTS poll_votes (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  fecha TEXT,
+                  poll_session TEXT,
+                  user_id INTEGER,
+                  user_name TEXT,
+                  num TEXT,
+                  animal TEXT,
+                  UNIQUE(poll_session, user_id),
+                  UNIQUE(poll_session, num)
+              )
+          """)
+      conn.commit()
+      conn.close()
+      logging.info("🗄️ Base de datos SQLite inicializada correctamente en modo WAL.")
+    except Exception as e:
+      logging.error(f"❌ Error inicializando base de datos SQLite: {e}")
 
 
 def verificar_y_registrar_resultado(fecha, agencia, loteria, hora, resultado):
-  """
-  Reclama atómicamente el envío de un resultado.
-  Devuelve True solo al proceso que obtiene el turno de envío.
-  Los registros históricos anteriores a esta versión quedan como 'sent'.
-  """
-  result_id, partes = construir_id_resultado(fecha, agencia, loteria, hora, resultado)
-  ahora = datetime.now().isoformat(timespec="seconds")
-  vencimiento = (datetime.now() - timedelta(minutes=3)).isoformat(timespec="seconds")
+  """Función central atómica para evitar duplicados mediante ID único y SQLite."""
+  f_norm = limpiar_texto(str(fecha)).upper()
+  ag_norm = normalizar_nombre(str(agencia))
+  lot_norm = normalizar_nombre(str(loteria))
+  h_norm = limpiar_texto(str(hora)).upper()
+  res_norm = limpiar_texto(str(resultado)).upper()
 
-  with resultado_lock:
+  result_id = f"{f_norm}_{ag_norm}_{lot_norm}_{h_norm}_{res_norm}"
+
+  with db_lock:
     try:
-      with db_session() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT OR IGNORE INTO sent_results
-              (result_id, fecha, agencia, loteria, hora, resultado, status, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'sending', ?)
-            """,
-            (result_id, *partes, ahora),
-        )
-        if cursor.rowcount == 1:
-          logging.info(
-              "[NEW RESULT CLAIMED] %s | %s | %s",
-              partes[2], partes[3], partes[4]
-          )
-          return True
-
-        cursor.execute(
-            "SELECT status, updated_at FROM sent_results WHERE result_id = ?",
-            (result_id,),
-        )
-        row = cursor.fetchone()
-        if not row:
-          return False
-
-        status, updated_at = row
-        if status == "sent":
-          logging.info("[DUPLICATE IGNORED] %s | %s | %s", partes[2], partes[3], partes[4])
-          return False
-
-        # Recupera envíos pendientes o bloqueados por una caída anterior.
-        if status == "pending" or (status == "sending" and (not updated_at or updated_at < vencimiento)):
-          cursor.execute(
-              """
-              UPDATE sent_results SET status = 'sending', updated_at = ?
-              WHERE result_id = ? AND status != 'sent'
-              """,
-              (ahora, result_id),
-          )
-          return cursor.rowcount == 1
-        return False
-    except Exception:
-      logging.exception("[RESULT ERROR] No se pudo reclamar el resultado.")
-      return False
-
-
-def finalizar_envio_resultado(fecha, agencia, loteria, hora, resultado, enviado):
-  """Marca el resultado como enviado o lo deja pendiente para reintento."""
-  result_id, _ = construir_id_resultado(fecha, agencia, loteria, hora, resultado)
-  nuevo_estado = "sent" if enviado else "pending"
-  try:
-    with db_session() as conn:
-      conn.execute(
-          "UPDATE sent_results SET status = ?, updated_at = ? WHERE result_id = ?",
-          (nuevo_estado, datetime.now().isoformat(timespec="seconds"), result_id),
+      conn = obtener_conexion_db()
+      cursor = conn.cursor()
+      cursor.execute(
+          """
+              INSERT OR IGNORE INTO sent_results (result_id, fecha, agencia, loteria, hora, resultado)
+              VALUES (?, ?, ?, ?, ?, ?)
+          """,
+          (result_id, f_norm, ag_norm, lot_norm, h_norm, res_norm),
       )
-    if enviado:
-      logging.info("[RESULT SENT CONFIRMED] %s | %s", loteria, hora)
-    else:
-      logging.warning("[RESULT PENDING] %s | %s; se reintentará en la siguiente revisión.", loteria, hora)
-  except Exception:
-    logging.exception("No se pudo actualizar el estado del resultado.")
+      conn.commit()
+
+      if cursor.rowcount > 0:
+        logging.info(f"[NEW RESULT] Resultado nuevo detectado: {lot_norm} | {h_norm} | {res_norm} (ID: {result_id})")
+        return True
+      else:
+        logging.info(f"[DUPLICATE IGNORED] Resultado duplicado descartado: {lot_norm} | {h_norm} | {res_norm} (ID: {result_id})")
+        return False
+    except Exception as e:
+      logging.error(f"[RESULT ERROR] Error en base de datos SQLite: {e}")
+      return False
+    finally:
+      if "conn" in locals() and conn:
+        conn.close()
 
 
 def registrar_historial_sorteo(fecha, loteria, hora, num, animal):
   """Registra cada sorteo salido en la base de datos para análisis diario."""
-  try:
-    conn = conectar_db()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-            SELECT id FROM lottery_history 
-            WHERE fecha = ? AND loteria = ? AND hora = ? AND num = ?
-        """,
-        (fecha, loteria, hora, num),
-    )
-    if not cursor.fetchone():
+  with db_lock:
+    try:
+      conn = obtener_conexion_db()
+      cursor = conn.cursor()
       cursor.execute(
           """
-                INSERT INTO lottery_history (fecha, loteria, hora, num, animal)
-                VALUES (?, ?, ?, ?, ?)
-            """,
-          (fecha, loteria, hora, num, animal),
+              SELECT id FROM lottery_history 
+              WHERE fecha = ? AND loteria = ? AND hora = ? AND num = ?
+          """,
+          (fecha, loteria, hora, num),
       )
-      conn.commit()
-    conn.close()
-  except Exception as e:
-    logging.error(f"❌ Error registrando historial de sorteo: {e}")
+      if not cursor.fetchone():
+        cursor.execute(
+            """
+                  INSERT INTO lottery_history (fecha, loteria, hora, num, animal)
+                  VALUES (?, ?, ?, ?, ?)
+              """,
+            (fecha, loteria, hora, num, animal),
+        )
+        conn.commit()
+      conn.close()
+    except Exception as e:
+      logging.error(f"❌ Error registrando historial de sorteo: {e}")
 
 
 def cerrar_encuesta_si_existe(nombre_loteria, hora_resultado):
   """Cierra automáticamente la encuesta activa de esta lotería cuando sale el resultado oficial."""
-  try:
-    fecha_str = datetime.now().strftime("%Y-%m-%d")
-    lot_norm = normalizar_nombre(nombre_loteria)
-    
-    conn = conectar_db()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT poll_session, chat_id, message_id FROM poll_sessions 
-        WHERE loteria = ? AND closed = 0 AND poll_session LIKE ?
-        """,
-        (lot_norm, f"{fecha_str}%")
-    )
-    sesiones = cursor.fetchall()
-    
-    for sesion in sesiones:
-      poll_session, chat_id, message_id = sesion
+  with db_lock:
+    try:
+      fecha_str = datetime.now().strftime("%Y-%m-%d")
+      lot_norm = normalizar_nombre(nombre_loteria)
       
-      cursor.execute("UPDATE poll_sessions SET closed = 1 WHERE poll_session = ?", (poll_session,))
-      conn.commit()
-      
-      cursor.execute("SELECT user_name, num, animal FROM poll_votes WHERE poll_session = ?", (poll_session,))
-      votos_finales = cursor.fetchall()
-      
-      lista_votos_str = "\n".join([f"• {v[0]}: **{v[1]} - {v[2]}**" for v in votos_finales]) if votos_finales else "(Sin votos registrados)"
-      
-      texto_cerrado = (
-          f"🔒 **¡ENCUESTA CERRADA!** ❌\n"
-          f"🎰 **LOTERÍA:** {nombre_loteria} ({hora_resultado})\n"
-          f"🏁 *¡El resultado oficial ya ha salido! Votación finalizada.*\n\n"
-          f"🏆 **Selecciones realizadas:**\n{lista_votos_str}"
+      conn = obtener_conexion_db()
+      cursor = conn.cursor()
+      cursor.execute(
+          """
+          SELECT poll_session, chat_id, message_id FROM poll_sessions 
+          WHERE loteria = ? AND closed = 0 AND poll_session LIKE ?
+          """,
+          (lot_norm, f"{fecha_str}%")
       )
+      sesiones = cursor.fetchall()
       
-      url_edit = f"https://api.telegram.org/bot{TOKEN}/editMessageText"
-      payload = {
-          "chat_id": chat_id,
-          "message_id": message_id,
-          "text": texto_cerrado,
-          "parse_mode": "Markdown"
-      }
-      http_session.post(url_edit, json=payload, timeout=10)
-      logging.info(f"🔒 Encuesta cerrada exitosamente para {nombre_loteria} ({hora_resultado})")
-      
-    conn.close()
-  except Exception as e:
-    logging.error(f"❌ Error cerrando encuesta: {e}")
+      for sesion in sesiones:
+        poll_session, chat_id, message_id = sesion
+        
+        cursor.execute("UPDATE poll_sessions SET closed = 1 WHERE poll_session = ?", (poll_session,))
+        conn.commit()
+        
+        cursor.execute("SELECT user_name, num, animal FROM poll_votes WHERE poll_session = ?", (poll_session,))
+        votos_finales = cursor.fetchall()
+        
+        lista_votos_str = "\n".join([f"• {v[0]}: **{v[1]} - {v[2]}**" for v in votos_finales]) if votos_finales else "(Sin votos registrados)"
+        
+        texto_cerrado = (
+            f"🔒 **¡ENCUESTA CERRADA!** ❌\n"
+            f"🎰 **LOTERÍA:** {nombre_loteria} ({hora_resultado})\n"
+            f"🏁 *¡El resultado oficial ya ha salido! Votación finalizada.*\n\n"
+            f"🏆 **Selecciones realizadas:**\n{lista_votos_str}"
+        )
+        
+        url_edit = f"https://api.telegram.org/bot{TOKEN}/editMessageText"
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": texto_cerrado,
+            "parse_mode": "Markdown"
+        }
+        http_session.post(url_edit, json=payload, timeout=10)
+        logging.info(f"🔒 Encuesta cerrada exitosamente para {nombre_loteria} ({hora_resultado})")
+        
+      conn.close()
+    except Exception as e:
+      logging.error(f"❌ Error cerrando encuesta: {e}")
 
 
 def cerrar_todas_encuestas_activas():
   """Cierra automáticamente las encuestas activas al llegar al minuto 57 para dar tiempo a los usuarios."""
-  try:
-    fecha_str = datetime.now().strftime("%Y-%m-%d")
-    conn = conectar_db()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT poll_session, loteria, chat_id, message_id FROM poll_sessions 
-        WHERE closed = 0 AND poll_session LIKE ?
-        """,
-        (f"{fecha_str}%",)
-    )
-    sesiones = cursor.fetchall()
-    
-    for sesion in sesiones:
-      poll_session, loteria_db, chat_id, message_id = sesion
-      cursor.execute("UPDATE poll_sessions SET closed = 1 WHERE poll_session = ?", (poll_session,))
-      conn.commit()
-      
-      cursor.execute("SELECT user_name, num, animal FROM poll_votes WHERE poll_session = ?", (poll_session,))
-      votos_finales = cursor.fetchall()
-      
-      lista_votos_str = "\n".join([f"• {v[0]}: **{v[1]} - {v[2]}**" for v in votos_finales]) if votos_finales else "(Sin votos registrados)"
-      
-      texto_cerrado = (
-          f"⏰🔒 **¡TIEMPO DE VOTACIÓN CERRADO!** ❌\n"
-          f"🎰 **LOTERÍA:** {loteria_db}\n"
-          f"🏁 *Se cerró la encuesta al minuto 57. ¡Esperando el resultado oficial!*\n\n"
-          f"🏆 **Selecciones realizadas:**\n{lista_votos_str}"
+  with db_lock:
+    try:
+      fecha_str = datetime.now().strftime("%Y-%m-%d")
+      conn = obtener_conexion_db()
+      cursor = conn.cursor()
+      cursor.execute(
+          """
+          SELECT poll_session, loteria, chat_id, message_id FROM poll_sessions 
+          WHERE closed = 0 AND poll_session LIKE ?
+          """,
+          (f"{fecha_str}%",)
       )
+      sesiones = cursor.fetchall()
       
-      url_edit = f"https://api.telegram.org/bot{TOKEN}/editMessageText"
-      payload = {
-          "chat_id": chat_id,
-          "message_id": message_id,
-          "text": texto_cerrado,
-          "parse_mode": "Markdown"
-      }
-      http_session.post(url_edit, json=payload, timeout=10)
-      logging.info(f"⏰ Encuesta cerrada por tiempo límite (minuto 57) para sesión {poll_session}")
-      
-    conn.close()
-  except Exception as e:
-    logging.error(f"❌ Error cerrando encuestas por tiempo límite: {e}")
+      for sesion in sesiones:
+        poll_session, loteria_db, chat_id, message_id = sesion
+        cursor.execute("UPDATE poll_sessions SET closed = 1 WHERE poll_session = ?", (poll_session,))
+        conn.commit()
+        
+        cursor.execute("SELECT user_name, num, animal FROM poll_votes WHERE poll_session = ?", (poll_session,))
+        votos_finales = cursor.fetchall()
+        
+        lista_votos_str = "\n".join([f"• {v[0]}: **{v[1]} - {v[2]}**" for v in votos_finales]) if votos_finales else "(Sin votos registrados)"
+        
+        texto_cerrado = (
+            f"⏰🔒 **¡TIEMPO DE VOTACIÓN CERRADO!** ❌\n"
+            f"🎰 **LOTERÍA:** {loteria_db}\n"
+            f"🏁 *Se cerró la encuesta al minuto 57. ¡Esperando el resultado oficial!*\n\n"
+            f"🏆 **Selecciones realizadas:**\n{lista_votos_str}"
+        )
+        
+        url_edit = f"https://api.telegram.org/bot{TOKEN}/editMessageText"
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": texto_cerrado,
+            "parse_mode": "Markdown"
+        }
+        http_session.post(url_edit, json=payload, timeout=10)
+        logging.info(f"⏰ Encuesta cerrada por tiempo límite (minuto 57) para sesión {poll_session}")
+        
+      conn.close()
+    except Exception as e:
+      logging.error(f"❌ Error cerrando encuestas por tiempo límite: {e}")
 
 
 def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, animal_nombre):
@@ -447,18 +366,19 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
     registrar_historial_sorteo(fecha_str, nombre_loteria, hora, num_limpio, animal_nombre)
     cerrar_encuesta_si_existe(nombre_loteria, hora)
 
-    conn = conectar_db()
-    cursor = conn.cursor()
+    with db_lock:
+      conn = obtener_conexion_db()
+      cursor = conn.cursor()
 
-    cursor.execute(
-        """
-            SELECT COUNT(*) FROM lottery_history 
-            WHERE fecha = ? AND loteria = ? AND num = ?
-        """,
-        (fecha_str, nombre_loteria, num_limpio),
-    )
-    count_rep = cursor.fetchone()[0]
-    conn.close()
+      cursor.execute(
+          """
+              SELECT COUNT(*) FROM lottery_history 
+              WHERE fecha = ? AND loteria = ? AND num = ?
+          """,
+          (fecha_str, nombre_loteria, num_limpio),
+      )
+      count_rep = cursor.fetchone()[0]
+      conn.close()
 
     markup_wa = InlineKeyboardMarkup()
     markup_wa.add(InlineKeyboardButton("📲 ESCRIBENOS AL WHATSAPP", url="https://wa.me/584124489363"))
@@ -473,10 +393,8 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
             f"{chiste_personalizado}\n\n"
             f"📲 WHATSAPP: 04124489363"
         )
-        ok = enviar_telegram_con_botones(mensaje_chiste, markup_dict)
-        finalizar_envio_resultado(fecha_str, "ALERTA", nombre_loteria, "REPETIDO_2", id_alerta_2, ok)
-        if ok:
-          logging.info(f"[ALERT SENT] Repetición x2 enviada: {nombre_loteria} - {num_limpio}")
+        enviar_telegram_con_botones(mensaje_chiste, markup_dict)
+        logging.info(f"[ALERT SENT] Repetición x2 enviada: {nombre_loteria} - {num_limpio}")
         time.sleep(2)
 
     elif count_rep >= 3:
@@ -489,25 +407,24 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
             f"¡Agarren ese animal antes de que se escape del terminal! 🔥🐯\n\n"
             f"📲 WHATSAPP: 04124489363"
         )
-        ok = enviar_telegram_con_botones(mensaje_se_jodio, markup_dict)
-        finalizar_envio_resultado(fecha_str, "ALERTA", nombre_loteria, f"REPETIDO_{count_rep}", id_alerta_3, ok)
-        if ok:
-          logging.info(f"[ALERT SENT] Repetición x{count_rep} enviada: {nombre_loteria} - {num_limpio}")
+        enviar_telegram_con_botones(mensaje_se_jodio, markup_dict)
+        logging.info(f"[ALERT SENT] Repetición x{count_rep} enviada: {nombre_loteria} - {num_limpio}")
         time.sleep(2)
 
     ahora_dt = datetime.now()
     if 8 <= ahora_dt.hour < 19 and regalos_hoy and len(regalos_hoy) == 3:
-      conn = conectar_db()
-      cursor = conn.cursor()
-      cursor.execute(
-          """
-              SELECT DISTINCT num FROM lottery_history 
-              WHERE fecha = ? AND loteria = ?
-          """,
-          (fecha_str, nombre_loteria),
-      )
-      salidos_hoy = {row[0].lstrip("0") for row in cursor.fetchall()}
-      conn.close()
+      with db_lock:
+        conn = obtener_conexion_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+                SELECT DISTINCT num FROM lottery_history 
+                WHERE fecha = ? AND loteria = ?
+            """,
+            (fecha_str, nombre_loteria),
+        )
+        salidos_hoy = {row[0].lstrip("0") for row in cursor.fetchall()}
+        conn.close()
 
       regalos_nums = {r[0].lstrip("0") for r in regalos_hoy}
       if regalos_nums.issubset(salidos_hoy):
@@ -527,10 +444,8 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
               f"🏆 ¡Tripleta completada con éxito en la Agencia Harold José!\n\n"
               f"📲 WHATSAPP: 04124489363"
           )
-          ok = enviar_telegram_con_botones(mensaje_tripleta, markup_dict)
-          finalizar_envio_resultado(fecha_str, "AGENCIA", nombre_loteria, "TRIPLETA", id_tripleta, ok)
-          if ok:
-            logging.info(f"[TRIPLETA SENT] Tripleta completada y enviada: {nombre_loteria}")
+          enviar_telegram_con_botones(mensaje_tripleta, markup_dict)
+          logging.info(f"[TRIPLETA SENT] Tripleta completada y enviada: {nombre_loteria}")
           time.sleep(2)
 
   except Exception as e:
@@ -539,28 +454,29 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
 
 def cargar_estado_disco():
   global primera_ejecucion, ultima_hora_polla, taquilla_activa_hoy, imagen_cashea_file_id, regalos_hoy, indice_loteria_encuesta
-  if os.path.exists(STATE_FILE):
-    try:
-      with open(STATE_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
-        imagen_cashea_file_id = data.get("imagen_cashea", None)
+  with db_lock:
+    if os.path.exists(STATE_FILE):
+      try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+          data = json.load(f)
+          imagen_cashea_file_id = data.get("imagen_cashea", None)
 
-        hoy_str = datetime.now().strftime("%Y-%m-%d")
-        if data.get("fecha") == hoy_str:
-          primera_ejecucion = data.get("primera_ejecucion", False)
-          if data.get("ultima_polla_hora"):
-            h_data = data.get("ultima_polla_hora")
-            ultima_hora_polla = (
-                datetime.strptime(h_data[0], "%Y-%m-%d").date(),
-                h_data[1],
-            )
-          taquilla_activa_hoy = data.get("taquilla_activa", False)
-          regalos_hoy = data.get("regalos_hoy", [])
-          indice_loteria_encuesta = data.get("indice_loteria_encuesta", 0)
-          logging.info("📂 Estado diario cargado desde disco.")
-          return
-    except Exception as e:
-      logging.warning(f"⚠️ Error cargando estado: {e}")
+          hoy_str = datetime.now().strftime("%Y-%m-%d")
+          if data.get("fecha") == hoy_str:
+            primera_ejecucion = data.get("primera_ejecucion", False)
+            if data.get("ultima_polla_hora"):
+              h_data = data.get("ultima_polla_hora")
+              ultima_hora_polla = (
+                  datetime.strptime(h_data[0], "%Y-%m-%d").date(),
+                  h_data[1],
+              )
+            taquilla_activa_hoy = data.get("taquilla_activa", False)
+            regalos_hoy = data.get("regalos_hoy", [])
+            indice_loteria_encuesta = data.get("indice_loteria_encuesta", 0)
+            logging.info("📂 Estado diario cargado desde disco.")
+            return
+      except Exception as e:
+        logging.warning(f"⚠️ Error cargando estado: {e}")
   primera_ejecucion = True
   ultima_hora_polla = None
   taquilla_activa_hoy = False
@@ -569,34 +485,35 @@ def cargar_estado_disco():
 
 
 def guardar_estado_disco():
-  try:
-    hoy_str = datetime.now().strftime("%Y-%m-%d")
-    polla_serializable = None
-    if ultima_hora_polla:
-      polla_serializable = [str(ultima_hora_polla[0]), ultima_hora_polla[1]]
+  with db_lock:
+    try:
+      hoy_str = datetime.now().strftime("%Y-%m-%d")
+      polla_serializable = None
+      if ultima_hora_polla:
+        polla_serializable = [str(ultima_hora_polla[0]), ultima_hora_polla[1]]
 
-    existing_cashea = imagen_cashea_file_id
-    if not existing_cashea and os.path.exists(STATE_FILE):
-      try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-          old_data = json.load(f)
-          existing_cashea = old_data.get("imagen_cashea", None)
-      except Exception:
-        pass
+      existing_cashea = imagen_cashea_file_id
+      if not existing_cashea and os.path.exists(STATE_FILE):
+        try:
+          with open(STATE_FILE, "r", encoding="utf-8") as f:
+            old_data = json.load(f)
+            existing_cashea = old_data.get("imagen_cashea", None)
+        except Exception:
+          pass
 
-    data = {
-        "fecha": hoy_str,
-        "primera_ejecucion": primera_ejecucion,
-        "ultima_polla_hora": polla_serializable,
-        "taquilla_activa": taquilla_activa_hoy,
-        "imagen_cashea": existing_cashea,
-        "regalos_hoy": regalos_hoy,
-        "indice_loteria_encuesta": indice_loteria_encuesta,
-    }
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-      json.dump(data, f, ensure_ascii=False, indent=2)
-  except Exception as e:
-    logging.warning(f"⚠️ Error guardando estado: {e}")
+      data = {
+          "fecha": hoy_str,
+          "primera_ejecucion": primera_ejecucion,
+          "ultima_polla_hora": polla_serializable,
+          "taquilla_activa": taquilla_activa_hoy,
+          "imagen_cashea": existing_cashea,
+          "regalos_hoy": regalos_hoy,
+          "indice_loteria_encuesta": indice_loteria_encuesta,
+      }
+      with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+      logging.warning(f"⚠️ Error guardando estado: {e}")
 
 
 inicializar_db()
@@ -754,7 +671,7 @@ def home():
 # --- RUTAS DE WEBHOOK DE TELEGRAM ---
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
-  if request.headers.get("content-type", "").lower().startswith("application/json"):
+  if request.headers.get("content-type") == "application/json":
     json_string = request.get_data().decode("utf-8")
     update = telebot.types.Update.de_json(json_string)
     bot.process_new_updates([update])
@@ -863,15 +780,11 @@ def enviar_telegram(mensaje, disable_web_preview=True):
       "disable_web_page_preview": disable_web_preview,
   }
   try:
-    response = http_session.post(url, json=payload, timeout=15)
-    data = response.json() if response.content else {}
-    if response.status_code == 200 and data.get("ok") is True:
-      return True
-    logging.warning("⚠️ Error al enviar al canal: HTTP %s - %s", response.status_code, response.text)
-    return False
+    response = http_session.post(url, json=payload, timeout=10)
+    if response.status_code != 200:
+      logging.warning(f"⚠️ Error al enviar al canal: {response.text}")
   except Exception as e:
     logging.warning(f"⚠️ Excepción de conexión con Telegram: {e}")
-    return False
 
 
 def enviar_telegram_con_botones(mensaje, reply_markup_dict):
@@ -884,15 +797,11 @@ def enviar_telegram_con_botones(mensaje, reply_markup_dict):
       "disable_web_page_preview": True,
   }
   try:
-    response = http_session.post(url, json=payload, timeout=15)
-    data = response.json() if response.content else {}
-    if response.status_code == 200 and data.get("ok") is True:
-      return True
-    logging.warning("⚠️ Error al enviar mensaje con botones: HTTP %s - %s", response.status_code, response.text)
-    return False
+    response = http_session.post(url, json=payload, timeout=10)
+    if response.status_code != 200:
+      logging.warning(f"⚠️ Error al enviar mensaje con botones: {response.text}")
   except Exception as e:
     logging.warning(f"⚠️ Excepción al enviar mensaje con botones: {e}")
-    return False
 
 
 def enviar_telegram_foto(photo_id, caption):
@@ -904,15 +813,11 @@ def enviar_telegram_foto(photo_id, caption):
       "parse_mode": "Markdown",
   }
   try:
-    response = http_session.post(url, json=payload, timeout=15)
-    data = response.json() if response.content else {}
-    if response.status_code == 200 and data.get("ok") is True:
-      return True
-    logging.warning("⚠️ Error al enviar foto al canal: HTTP %s - %s", response.status_code, response.text)
-    return False
+    response = http_session.post(url, json=payload, timeout=10)
+    if response.status_code != 200:
+      logging.warning(f"⚠️ Error al enviar foto al canal: {response.text}")
   except Exception as e:
     logging.warning(f"⚠️ Excepción de conexión con Telegram al enviar foto: {e}")
-    return False
 
 
 def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
@@ -926,15 +831,11 @@ def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
   if reply_markup_dict:
     payload["reply_markup"] = reply_markup_dict
   try:
-    response = http_session.post(url, json=payload, timeout=15)
-    data = response.json() if response.content else {}
-    if response.status_code == 200 and data.get("ok") is True:
-      return True
-    logging.warning("⚠️ Error al enviar foto con botones: HTTP %s - %s", response.status_code, response.text)
-    return False
+    response = http_session.post(url, json=payload, timeout=10)
+    if response.status_code != 200:
+      logging.warning(f"⚠️ Error al enviar foto con botones al canal: {response.text}")
   except Exception as e:
-    logging.warning(f"⚠️ Excepción al enviar foto con botones: {e}")
-    return False
+      logging.warning(f"⚠️ Excepción al enviar foto con botones: {e}")
 
 
 def construir_teclado_animalitos(loteria_nombre, poll_session):
@@ -999,17 +900,18 @@ def enviar_encuesta_sorteo():
       res_json = response.json()
       message_id = res_json.get("result", {}).get("message_id")
       
-      conn = conectar_db()
-      cursor = conn.cursor()
-      cursor.execute(
-          """
-          INSERT OR REPLACE INTO poll_sessions (poll_session, loteria, chat_id, message_id, closed)
-          VALUES (?, ?, ?, ?, 0)
-          """,
-          (poll_session, normalizar_nombre(loteria_actual), str(CANAL), message_id)
-      )
-      conn.commit()
-      conn.close()
+      with db_lock:
+        conn = obtener_conexion_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO poll_sessions (poll_session, loteria, chat_id, message_id, closed)
+            VALUES (?, ?, ?, ?, 0)
+            """,
+            (poll_session, normalizar_nombre(loteria_actual), str(CANAL), message_id)
+        )
+        conn.commit()
+        conn.close()
       logging.info(f"✅ Encuesta enviada para {loteria_actual} ({hora_sorteo_str}) - Sesión {poll_session}")
     else:
       logging.warning(f"⚠️ Error enviando encuesta: {response.text}")
@@ -1039,43 +941,44 @@ def handle_poll_vote(call):
     user_name = call.from_user.first_name or "Usuario"
     animal_nombre = ANIMALITOS_EXTENDIDOS_DICT.get(num_elegido, f"Animal {num_elegido}")
 
-    conn = conectar_db()
-    cursor = conn.cursor()
+    with db_lock:
+      conn = obtener_conexion_db()
+      cursor = conn.cursor()
 
-    cursor.execute("SELECT closed FROM poll_sessions WHERE poll_session = ?", (poll_session,))
-    row_closed = cursor.fetchone()
-    if row_closed and row_closed[0] == 1:
+      cursor.execute("SELECT closed FROM poll_sessions WHERE poll_session = ?", (poll_session,))
+      row_closed = cursor.fetchone()
+      if row_closed and row_closed[0] == 1:
+        conn.close()
+        bot.answer_callback_query(call.id, text="❌ Esta encuesta ya está cerrada.", show_alert=True)
+        return
+
+      cursor.execute("SELECT num, animal FROM poll_votes WHERE poll_session = ? AND user_id = ?", (poll_session, user_id))
+      user_vote = cursor.fetchone()
+      if user_vote:
+        conn.close()
+        bot.answer_callback_query(call.id, text=f"❌ Ya elegiste el {user_vote[0]} - {user_vote[1]} en esta encuesta.", show_alert=True)
+        return
+
+      cursor.execute("SELECT user_name FROM poll_votes WHERE poll_session = ? AND num = ?", (poll_session, num_elegido))
+      animal_taken = cursor.fetchone()
+      if animal_taken:
+        conn.close()
+        bot.answer_callback_query(call.id, text=f"❌ ¡El {num_elegido} - {animal_nombre} ya fue elegido por {animal_taken[0]}! Elige otro.", show_alert=True)
+        return
+
+      cursor.execute(
+          "INSERT INTO poll_votes (fecha, poll_session, user_id, user_name, num, animal) VALUES (?, ?, ?, ?, ?, ?)",
+          (datetime.now().strftime("%Y-%m-%d"), poll_session, user_id, user_name, num_elegido, animal_nombre)
+      )
+      conn.commit()
+
+      cursor.execute("SELECT user_name, num, animal FROM poll_votes WHERE poll_session = ?", (poll_session,))
+      votos_actuales = cursor.fetchall()
+      
+      cursor.execute("SELECT loteria FROM poll_sessions WHERE poll_session = ?", (poll_session,))
+      lot_db_row = cursor.fetchone()
+      loteria_nombre_actual = lot_db_row[0] if lot_db_row else "LOTERÍA"
       conn.close()
-      bot.answer_callback_query(call.id, text="❌ Esta encuesta ya está cerrada.", show_alert=True)
-      return
-
-    cursor.execute("SELECT num, animal FROM poll_votes WHERE poll_session = ? AND user_id = ?", (poll_session, user_id))
-    user_vote = cursor.fetchone()
-    if user_vote:
-      conn.close()
-      bot.answer_callback_query(call.id, text=f"❌ Ya elegiste el {user_vote[0]} - {user_vote[1]} en esta encuesta.", show_alert=True)
-      return
-
-    cursor.execute("SELECT user_name FROM poll_votes WHERE poll_session = ? AND num = ?", (poll_session, num_elegido))
-    animal_taken = cursor.fetchone()
-    if animal_taken:
-      conn.close()
-      bot.answer_callback_query(call.id, text=f"❌ ¡El {num_elegido} - {animal_nombre} ya fue elegido por {animal_taken[0]}! Elige otro.", show_alert=True)
-      return
-
-    cursor.execute(
-        "INSERT INTO poll_votes (fecha, poll_session, user_id, user_name, num, animal) VALUES (?, ?, ?, ?, ?, ?)",
-        (datetime.now().strftime("%Y-%m-%d"), poll_session, user_id, user_name, num_elegido, animal_nombre)
-    )
-    conn.commit()
-
-    cursor.execute("SELECT user_name, num, animal FROM poll_votes WHERE poll_session = ?", (poll_session,))
-    votos_actuales = cursor.fetchall()
-    
-    cursor.execute("SELECT loteria FROM poll_sessions WHERE poll_session = ?", (poll_session,))
-    lot_db_row = cursor.fetchone()
-    loteria_nombre_actual = lot_db_row[0] if lot_db_row else "LOTERÍA"
-    conn.close()
 
     bot.answer_callback_query(call.id, text=f"✅ ¡Has asegurado el {num_elegido} - {animal_nombre} con éxito!", show_alert=False)
 
@@ -1196,7 +1099,7 @@ def generar_piramide():
       f"📅 Fecha: {fecha_str}\nAnálisis matemático actualizado y listo para"
       f" la jugada. ¡A asegurar posición:\n\n{cuerpo_piramide}\n\n📊 SUMA POR"
       f" FILA:\n{bloque_sumas}\n\n🔥 DATOS CLAVES PARA HOY:\n📌"
-      f" {d1}\n📌 {d2}\n\n⚡ ¡La precisión y los números hablan por sí"
+      f" {d1}\n📌 {d2}\n\n⚡ 🙏 ¡La precisión y los números hablan por sí"
       " solos! ¡Juega con confianza y gana con nosotros! 🍀 💰"
   )
 
@@ -1476,17 +1379,13 @@ def verificar_resultados():
         if primera_ejecucion:
           # Registramos en sent_results para que el bot no los mande repetidos al canal,
           # pero OMITIMOS registrar_historial_sorteo para que los datos de ayer no afecten el día de hoy.
-          if verificar_y_registrar_resultado(
+          verificar_y_registrar_resultado(
               fecha_actual_str,
               agencia_nombre,
               nombre_loteria,
               hora,
               resultado_final,
-          ):
-            finalizar_envio_resultado(
-                fecha_actual_str, agencia_nombre, nombre_loteria,
-                hora, resultado_final, True
-            )
+          )
         else:
           if verificar_y_registrar_resultado(
               fecha_actual_str,
@@ -1511,20 +1410,16 @@ def verificar_resultados():
                 "•••••••••••••••••••••••••••••••••••\n"
                 "📲 WHATSAPP: 04124489363"
             )
-            enviado = enviar_telegram_con_botones(mensaje_res, markup_dict)
-            finalizar_envio_resultado(
-                fecha_actual_str, agencia_nombre, nombre_loteria,
-                hora, resultado_final, enviado
-            )
-            if enviado:
+            try:
+              enviar_telegram_con_botones(mensaje_res, markup_dict)
               logging.info(
-                  f"[RESULT SENT] Resultado confirmado en Telegram: {nombre_loteria}"
+                  f"[RESULT SENT] Resultado enviado a Telegram: {nombre_loteria}"
                   f" | {hora} | {resultado_final}"
               )
-              time.sleep(2)
-            else:
-              # No se procesa como publicado; la próxima consulta podrá reintentarlo.
-              continue
+            except Exception as e:
+              logging.error(f"[RESULT ERROR] Error enviando a Telegram: {e}")
+
+            time.sleep(2)
 
             analizar_eventos_especiales(fecha_actual_str, nombre_loteria, hora, num_limpio, animal_nombre)
 
@@ -1641,11 +1536,7 @@ def iniciar_scheduler():
   scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
   scheduler.add_job(tarea_minuto_diez, "cron", hour="7-17", minute=10)
   scheduler.add_job(enviar_mensaje_cierre, "cron", hour=21, minute=10)
-  scheduler.add_job(
-      verificar_resultados, "interval", seconds=30,
-      id="verificar_resultados", max_instances=1, coalesce=True,
-      misfire_grace_time=20
-  )
+  scheduler.add_job(verificar_resultados, "interval", seconds=30)
 
   scheduler.start()
   verificar_resultados()
@@ -1662,7 +1553,7 @@ def configurar_webhook():
     except Exception as e:
       logging.error(f"❌ Error configurando el webhook: {e}")
   else:
-    logging.warning("⚠️ RENDER_EXTERNAL_URL no está definido.")
+      logging.warning("⚠️ RENDER_EXTERNAL_URL no está definido.")
 
 
 if __name__ == "__main__":
