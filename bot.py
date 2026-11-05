@@ -6,7 +6,6 @@ import random
 import re
 from threading import Thread
 import time
-database = None
 import traceback
 from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
@@ -49,6 +48,9 @@ URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
 URL_BCV = "https://www.bcv.org.ve/"
 STATE_FILE = "bot_state.json"
 DB_FILE = "bot_results.db"
+
+# Memoria temporal RAM ultrarrápida anti-spam (Bloqueo por 3 minutos)
+memoria_envios_recientes = {}
 
 # Sesión HTTP optimizada para reuso de conexiones
 http_session = requests.Session()
@@ -143,10 +145,15 @@ def verificar_y_registrar_resultado(
   # Construcción del ID único normalizado
   result_id = f"{f_norm}_{ag_norm}_{lot_norm}_{h_norm}_{res_norm}"
 
+  # 🛡️ CAPA 1: Validación instantánea en Memoria RAM anti-spam
+  tiempo_actual = time.time()
+  if result_id in memoria_envios_recientes:
+    if tiempo_actual - memoria_envios_recientes[result_id] < 180:
+      return False
+
   try:
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Operación atómica con INSERT OR IGNORE para prevenir condiciones de carrera
     cursor.execute(
         """
             INSERT OR IGNORE INTO sent_results (result_id, fecha, agencia, loteria, hora, resultado)
@@ -157,12 +164,14 @@ def verificar_y_registrar_resultado(
     conn.commit()
 
     if cursor.rowcount > 0:
+      memoria_envios_recientes[result_id] = tiempo_actual
       logging.info(
           f"[NEW RESULT] Resultado nuevo detectado y registrado: {lot_norm} |"
           f" {h_norm} | {res_norm} (ID: {result_id})"
       )
       return True
     else:
+      memoria_envios_recientes[result_id] = tiempo_actual
       logging.info(
           f"[DUPLICATE IGNORED] Resultado duplicado descartado: {lot_norm} |"
           f" {h_norm} | {res_norm} (ID: {result_id})"
@@ -825,6 +834,7 @@ def enviar_mensaje_cierre():
   guardar_estado_disco()
 
 
+# --- MOTOR DE SCRAPING BLINDADO (SOLO TARJETAS INFERIORES DE CADA LOTERÍA) ---
 def verificar_resultados():
   global primera_ejecucion, regalos_hoy
   try:
@@ -838,12 +848,28 @@ def verificar_resultados():
 
     soup = BeautifulSoup(respuesta.text, "html.parser")
 
-    tarjetas = soup.find_all(
-        ["div", "article", "section"],
-        class_=re.compile(r"card|box|item|lotto|result", re.IGNORECASE),
-    )
+    # 🛡️ FILTRO MAESTRO: Buscamos únicamente las tarjetas de loterías inferiores,
+    # ignorando por completo el bloque superior de "Últimos salidos".
+    tarjetas = []
+    for div in soup.find_all(["div", "section", "article"]):
+      texto_div = div.get_text(" ", strip=True).upper()
+      if (
+          "SORTEOS OFICIALES" in texto_div
+          or "ACTIVA" in texto_div
+          or "PENDIENTE" in texto_div
+      ):
+        if (
+            "RESULTADOS DE HOY" not in texto_div
+            and "ÚLTIMOS SALIDOS" not in texto_div
+            and "ULTIMOS SALIDOS" not in texto_div
+        ):
+          tarjetas.append(div)
+
     if not tarjetas:
-      tarjetas = soup.find_all(["div", "section"])
+      tarjetas = soup.find_all(
+          ["div", "section"],
+          class_=re.compile(r"card|box|item|lotto", re.IGNORECASE),
+      )
 
     fecha_actual_str = datetime.now().strftime("%Y-%m-%d")
     agencia_nombre = "AGENCIA HAROLD JOSÉ"
@@ -852,6 +878,7 @@ def verificar_resultados():
     for tarjeta in tarjetas:
       texto_completo_tarjeta = tarjeta.get_text(" ", strip=True).upper()
 
+      # Doble comprobación de seguridad para descartar cualquier rastro del bloque superior
       if (
           "RESULTADOS DE HOY" in texto_completo_tarjeta
           or "ÚLTIMOS SALIDOS" in texto_completo_tarjeta
@@ -876,6 +903,9 @@ def verificar_resultados():
             and "RESULTADOS" not in t_text
             and "WINBIG" not in t_text
             and "HOY" not in t_text
+            and "SORTEOS" not in t_text
+            and "OFICIALES" not in t_text
+            and "ACTIVA" not in t_text
         ):
           nombre_loteria = t_text
           break
@@ -915,7 +945,11 @@ def verificar_resultados():
 
         resultado_final = limpiar_texto(match_res.group(1)).upper()
 
-        clave_slot = (normalizar_nombre(nombre_loteria), hora)
+        clave_slot = (
+            normalizar_nombre(nombre_loteria),
+            hora,
+            normalizar_nombre(resultado_final),
+        )
         if clave_slot in procesados_en_esta_corrida:
           continue
         procesados_en_esta_corrida.add(clave_slot)
@@ -930,7 +964,7 @@ def verificar_resultados():
               resultado_final,
           )
         else:
-          # Verificación y registro atómico centralizado
+          # Verificación y registro atómico centralizado con doble capa anti-spam
           if verificar_y_registrar_resultado(
               fecha_actual_str,
               agencia_nombre,
