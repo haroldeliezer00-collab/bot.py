@@ -33,11 +33,10 @@ except Exception as e:
 # Desactivar advertencias de certificados SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Credenciales y canal principal configurado con el token actual
 TOKEN = os.environ.get(
     "TELEGRAM_TOKEN", "8733552499:AAFL_86sFP2twwGRF1rIXhGeZPRYcOqW8Go"
 )
-CANAL = "@resultadosagharoldjose"  # Canal oficial de producción indicado
+CANAL = "@resultadosagharoldjose"
 ENLACE_CANAL = "https://t.me/resultadosagharoldjose"
 ENLACE_POLLAS = "https://t.me/pollasydupletas"
 
@@ -49,31 +48,24 @@ URL_BCV = "https://www.bcv.org.ve/"
 STATE_FILE = "bot_state.json"
 DB_FILE = "bot_results.db"
 
-# Cerrojo atómico para operaciones de base de datos y evitar condiciones de carrera
 db_lock = Lock()
-
-# Memoria temporal RAM ultrarrápida anti-spam (Guarda la firma y timestamp del envío)
 memoria_envios_recientes = {}
 
-# Sesión HTTP optimizada para reuso de conexiones
 http_session = requests.Session()
 http_session.headers.update(
     {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
 )
 
-# Control estricto anti-duplicados y memoria
 primera_ejecucion = True
 ultima_hora_polla = None
-
 taquilla_activa_hoy = False
 imagen_taquilla_file_id = None
 imagen_cashea_file_id = None
 regalos_hoy = []
-indice_loteria_encuesta = 0  # Control rotativo para las encuestas
+indice_loteria_encuesta = 0
 
 LOTERIAS_ENCUESTA = ["LOTTO ACTIVO", "LA GRANJITA", "SELVA PLUS", "GUACHARO ACTIVO", "LOTO CHAIMA"]
 
-# Diccionario completo de animalitos para cubrir todas las tablas extendidas
 ANIMALITOS_EXTENDIDOS_DICT = {
     "0": "Delfín", "00": "Ballena", "1": "Carnero", "2": "Toro", "3": "Ciempiés", "4": "Alacrán",
     "5": "León", "6": "Rana", "7": "Perico", "8": "Ratón", "9": "Águila", "10": "Tigre",
@@ -91,7 +83,6 @@ ANIMALITOS_EXTENDIDOS_DICT = {
     "73": "Hipopótamo", "74": "Turpial", "75": "Guácharo"
 }
 
-# Banco de chistes variados y personalizados por animal para repetición x2
 CHISTES_REPETICION = {
     "12": [
         "El 12 - Caballo volvió a desbocarse en {loteria}. ¡Parece que le inyectaron nitro hoy! 🐴💨",
@@ -99,7 +90,7 @@ CHISTES_REPETICION = {
     ],
     "10": [
         "El 10 - Tigre anda hambriento hoy en {loteria}, repitió de nuevo. ¡Échale carne antes de que se coma la banca! 🐅🥩",
-        "¡Zarandeo de rayitas en {loteria}! El Tigre voltou a salir. ¡Cuidado y te da un susto! 🐯🔥",
+        "¡Zarandeo de rayitas en {loteria}! El Tigre volvió a salir. ¡Cuidado y te da un susto! 🐯🔥",
     ],
     "36": [
         "¡Cuidado con el piso! La 36 - Culebra volvió a deslizarse y repitió en {loteria}. ¡Ese animal no pica, bota fuego! 🐍⚡",
@@ -127,7 +118,6 @@ CHISTES_GENERICOS = [
 
 
 def obtener_conexion_db():
-  """Crea una conexión SQLite segura con modo WAL activado para alta concurrencia."""
   conn = sqlite3.connect(DB_FILE, timeout=10.0)
   conn.execute("PRAGMA journal_mode=WAL;")
   conn.execute("PRAGMA busy_timeout = 5000;")
@@ -135,7 +125,6 @@ def obtener_conexion_db():
 
 
 def obtener_chiste_repetido(num, animal, loteria):
-  """Devuelve un chiste variado y adaptado al animal que repite."""
   if num in CHISTES_REPETICION:
     plantilla = random.choice(CHISTES_REPETICION[num])
     return plantilla.format(loteria=loteria)
@@ -145,7 +134,6 @@ def obtener_chiste_repetido(num, animal, loteria):
 
 
 def inicializar_db():
-  """Inicializa la base de datos SQLite persistente para control de duplicados, historial y encuestas."""
   with db_lock:
     try:
       conn = obtener_conexion_db()
@@ -195,13 +183,12 @@ def inicializar_db():
           """)
       conn.commit()
       conn.close()
-      logging.info("🗄️ Base de datos SQLite inicializada correctamente en modo WAL.")
+      logging.info("🗄️ Base de datos SQLite inicializada en modo WAL.")
     except Exception as e:
-      logging.error(f"❌ Error inicializando base de datos SQLite: {e}")
+      logging.error(f"❌ Error en inicializar_db: {e}")
 
 
 def verificar_y_registrar_resultado(fecha, agencia, loteria, hora, resultado):
-  """Función central atómica para evitar duplicados mediante ID único y SQLite."""
   f_norm = limpiar_texto(str(fecha)).upper()
   ag_norm = normalizar_nombre(str(agencia))
   lot_norm = normalizar_nombre(str(loteria))
@@ -210,11 +197,9 @@ def verificar_y_registrar_resultado(fecha, agencia, loteria, hora, resultado):
 
   result_id = f"{f_norm}_{ag_norm}_{lot_norm}_{h_norm}_{res_norm}"
 
-  # 🛡️ CAPA 1: Revisión inmediata en memoria RAM anti-spam
   tiempo_actual = time.time()
   if result_id in memoria_envios_recientes:
-    if tiempo_actual - memoria_envios_recientes[result_id] < 180: # Bloqueo por 3 minutos
-      logging.info(f"[RAM SPAM BLOCKED] Resultado bloqueado por memoria RAM: {result_id}")
+    if tiempo_actual - memoria_envios_recientes[result_id] < 180:
       return False
 
   with db_lock:
@@ -232,14 +217,12 @@ def verificar_y_registrar_resultado(fecha, agencia, loteria, hora, resultado):
 
       if cursor.rowcount > 0:
         memoria_envios_recientes[result_id] = tiempo_actual
-        logging.info(f"[NEW RESULT] Resultado nuevo detectado: {lot_norm} | {h_norm} | {res_norm} (ID: {result_id})")
         return True
       else:
         memoria_envios_recientes[result_id] = tiempo_actual
-        logging.info(f"[DUPLICATE IGNORED] Resultado duplicado descartado en DB: {lot_norm} | {h_norm} | {res_norm} (ID: {result_id})")
         return False
     except Exception as e:
-      logging.error(f"[RESULT ERROR] Error en base de datos SQLite: {e}")
+      logging.error(f"❌ Error en DB: {e}")
       return False
     finally:
       if "conn" in locals() and conn:
@@ -247,7 +230,6 @@ def verificar_y_registrar_resultado(fecha, agencia, loteria, hora, resultado):
 
 
 def registrar_historial_sorteo(fecha, loteria, hora, num, animal):
-  """Registra cada sorteo salido en la base de datos para análisis diario."""
   with db_lock:
     try:
       conn = obtener_conexion_db()
@@ -270,11 +252,10 @@ def registrar_historial_sorteo(fecha, loteria, hora, num, animal):
         conn.commit()
       conn.close()
     except Exception as e:
-      logging.error(f"❌ Error registrando historial de sorteo: {e}")
+      logging.error(f"❌ Error registrando historial: {e}")
 
 
 def cerrar_encuesta_si_existe(nombre_loteria, hora_resultado):
-  """Cierra automáticamente la encuesta activa de esta lotería cuando sale el resultado oficial."""
   with db_lock:
     try:
       fecha_str = datetime.now().strftime("%Y-%m-%d")
@@ -293,7 +274,6 @@ def cerrar_encuesta_si_existe(nombre_loteria, hora_resultado):
       
       for sesion in sesiones:
         poll_session, chat_id, message_id = sesion
-        
         cursor.execute("UPDATE poll_sessions SET closed = 1 WHERE poll_session = ?", (poll_session,))
         conn.commit()
         
@@ -317,15 +297,12 @@ def cerrar_encuesta_si_existe(nombre_loteria, hora_resultado):
             "parse_mode": "Markdown"
         }
         http_session.post(url_edit, json=payload, timeout=10)
-        logging.info(f"🔒 Encuesta cerrada exitosamente para {nombre_loteria} ({hora_resultado})")
-        
       conn.close()
     except Exception as e:
       logging.error(f"❌ Error cerrando encuesta: {e}")
 
 
 def cerrar_todas_encuestas_activas():
-  """Cierra automáticamente las encuestas activas al llegar al minuto 57 para dar tiempo a los usuarios."""
   with db_lock:
     try:
       fecha_str = datetime.now().strftime("%Y-%m-%d")
@@ -353,7 +330,7 @@ def cerrar_todas_encuestas_activas():
         texto_cerrado = (
             f"⏰🔒 **¡TIEMPO DE VOTACIÓN CERRADO!** ❌\n"
             f"🎰 **LOTERÍA:** {loteria_db}\n"
-            f"🏁 *Se cerró la encuesta al minuto 57. ¡Esperando el resultado oficial!*\n\n"
+            f"🏁 *Se cerró la encuesta al minuto 57. ¡Esperando resultado oficial!*\n\n"
             f"🏆 **Selecciones realizadas:**\n{lista_votos_str}"
         )
         
@@ -365,15 +342,12 @@ def cerrar_todas_encuestas_activas():
             "parse_mode": "Markdown"
         }
         http_session.post(url_edit, json=payload, timeout=10)
-        logging.info(f"⏰ Encuesta cerrada por tiempo límite (minuto 57) para sesión {poll_session}")
-        
       conn.close()
     except Exception as e:
-      logging.error(f"❌ Error cerrando encuestas por tiempo límite: {e}")
+      logging.error(f"❌ Error cerrando encuestas por tiempo: {e}")
 
 
 def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, animal_nombre):
-  """Analiza repeticiones del día actual, tripletas y cierra la encuesta de la lotería correspondiente."""
   try:
     registrar_historial_sorteo(fecha_str, nombre_loteria, hora, num_limpio, animal_nombre)
     cerrar_encuesta_si_existe(nombre_loteria, hora)
@@ -381,7 +355,6 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
     with db_lock:
       conn = obtener_conexion_db()
       cursor = conn.cursor()
-
       cursor.execute(
           """
               SELECT COUNT(*) FROM lottery_history 
@@ -406,7 +379,6 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
             f"📲 WHATSAPP: 04124489363"
         )
         enviar_telegram_con_botones(mensaje_chiste, markup_dict)
-        logging.info(f"[ALERT SENT] Repetición x2 enviada: {nombre_loteria} - {num_limpio}")
         time.sleep(2)
 
     elif count_rep >= 3:
@@ -415,12 +387,10 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
         mensaje_se_jodio = (
             f"🚨 **¡SE JODIÓ COMPADRE!** 🚨\n\n"
             f"¿Se quedaron sin animalitos en la banca o qué? El **{num_limpio} - {animal_nombre}** "
-            f"ya ha salido **{count_rep} veces hoy** en **{nombre_loteria}**. "
-            f"¡Agarren ese animal antes de que se escape del terminal! 🔥🐯\n\n"
+            f"ya ha salido **{count_rep} veces hoy** en **{nombre_loteria}**. ¡Agarren ese animal! 🔥🐯\n\n"
             f"📲 WHATSAPP: 04124489363"
         )
         enviar_telegram_con_botones(mensaje_se_jodio, markup_dict)
-        logging.info(f"[ALERT SENT] Repetición x{count_rep} enviada: {nombre_loteria} - {num_limpio}")
         time.sleep(2)
 
     ahora_dt = datetime.now()
@@ -448,16 +418,12 @@ def analizar_eventos_especiales(fecha_str, nombre_loteria, hora, num_limpio, ani
 
           mensaje_tripleta = (
               f"🎉🎁 **¡TRIPLETAZA COMPLETADA EN LA BANCA!** 🥳🎉\n\n"
-              f"¡Felicidades a todos los que jugaron los 3 regalos de la mañana! "
-              f"Los 3 fijos salieron hoy en **{nombre_loteria}**:\n\n"
-              f"⭐ {r1}\n"
-              f"⭐ {r2}\n"
-              f"⭐ {r3}\n\n"
+              f"¡Los 3 fijos salieron hoy en **{nombre_loteria}**:\n\n"
+              f"⭐ {r1}\n⭐ {r2}\n⭐ {r3}\n\n"
               f"🏆 ¡Tripleta completada con éxito en la Agencia Harold José!\n\n"
               f"📲 WHATSAPP: 04124489363"
           )
           enviar_telegram_con_botones(mensaje_tripleta, markup_dict)
-          logging.info(f"[TRIPLETA SENT] Tripleta completada y enviada: {nombre_loteria}")
           time.sleep(2)
 
   except Exception as e:
@@ -472,7 +438,6 @@ def cargar_estado_disco():
         with open(STATE_FILE, "r", encoding="utf-8") as f:
           data = json.load(f)
           imagen_cashea_file_id = data.get("imagen_cashea", None)
-
           hoy_str = datetime.now().strftime("%Y-%m-%d")
           if data.get("fecha") == hoy_str:
             primera_ejecucion = data.get("primera_ejecucion", False)
@@ -485,7 +450,6 @@ def cargar_estado_disco():
             taquilla_activa_hoy = data.get("taquilla_activa", False)
             regalos_hoy = data.get("regalos_hoy", [])
             indice_loteria_encuesta = data.get("indice_loteria_encuesta", 0)
-            logging.info("📂 Estado diario cargado desde disco.")
             return
       except Exception as e:
         logging.warning(f"⚠️ Error cargando estado: {e}")
@@ -624,7 +588,7 @@ TEXTO_PUBLICITARIO = (
     "📲 Entra a nuestro canal de Telegram y consulta todos los resultados:\n"
     f"👉 {ENLACE_CANAL}\n"
     "🔥 AGENCIA HAROLD JOSÉ 🔥\n"
-    "💰 JUEGA COM CONFIANZA"
+    "💰 JUEGA CON CONFIANZA"
 )
 
 TEXTO_CASHEA = (
@@ -635,52 +599,16 @@ TEXTO_CASHEA = (
     " segura! ⚡"
 )
 
-HEADER_RESULTADOS = (
-    "AGENCIA HAROLD JOSÉ\n"
-    "SEGURIDAD Y CONFIANZA\n"
-    "RESULTADOS OFICIALES\n"
-    "📲JUEGA AQUI👇👇\n"
-    "WHATSAPP: 04124489363\n\n"
-    f"📢 CANAL DE RESULTADOS:\n{ENLACE_CANAL}"
-)
-
 app = Flask("")
 
 
 @app.route("/")
 def home():
-  estado_tag = (
-      "ACTIVADA 🟢 (Trabajando hoy)"
-      if taquilla_activa_hoy
-      else "DESACTIVADA 🔴 (No laborando)"
-  )
-  cashea_tag = (
-      "CONFIGURADA 🟢 (Imagen persistente cargada)"
-      if imagen_cashea_file_id
-      else "SOLO TEXTO 🟡 (Sin imagen aún)"
-  )
-  return (
-      f"¡El bot de resultados de la AGENCIA HAROLD JOSÉ está activo en el canal"
-      f" oficial {CANAL}!<br><br><b>Estado del aviso de taquilla de hoy:</b>"
-      f" {estado_tag}<br><b>Estado de la imagen de Cashea:</b>"
-      f" {cashea_tag}<br><br><b>Enlaces de prueba rápida (Test de cada"
-      " opción):</b><br>👉 <a href='/test/madrugada'>Probar Saludo de Madrugada"
-      " (6:30 AM)</a><br>👉 <a href='/test/piramide'>Probar Pirámide Numérica"
-      " con Sumas por Fila (6:31 AM)</a><br>👉 <a href='/test/regalos'>Probar"
-      " Regalos de la Agencia (6:45 AM)</a><br>👉 <a href='/test/saludo'>Probar"
-      " Saludo Matutino (7:00 AM)</a><br>👉 <a href='/test/publicidad'>Probar"
-      " Aviso Publicitario (7am/3pm/6pm)</a><br>👉 <a"
-      " href='/test/cashea'>Probar Aviso con Botones Cashea (9am a 4:30"
-      " pm)</a><br>👉 <a href='/test/tiempocumplido'>Probar Tiempo Cumplido + Encuesta</a><br>👉 <a href='/test/bcv'>Probar Tasa Oficial"
-      " BCV</a><br>👉 <a href='/test/taquilla_manual'>Probar Envío Manual de"
-      " Taquilla Activa</a><br>👉 <a href='/test/pollas'>Probar Aviso de Pollas"
-      " (Minuto 10)</a><br>👉 <a href='/test/resultados'>Forzar Revisión de"
-      " Resultados Individuales</a><br>👉 <a href='/test/cierre'>Probar Mensaje"
-      " de Cierre (9:10 PM)</a><br>👉 <a href='/test/encuesta'>Probar Encuesta Interactiva Manual</a>"
-  )
+  estado_tag = "ACTIVADA 🟢" if taquilla_activa_hoy else "DESACTIVADA 🔴"
+  cashea_tag = "CONFIGURADA 🟢" if imagen_cashea_file_id else "SOLO TEXTO 🟡"
+  return f"Agencia Harold José Bot Activo.<br>Taquilla: {estado_tag}<br>Cashea: {cashea_tag}"
 
 
-# --- RUTAS DE WEBHOOK DE TELEGRAM ---
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
   if request.headers.get("content-type") == "application/json":
@@ -691,88 +619,10 @@ def webhook():
   return "Forbidden", 403
 
 
-@app.route("/test/madrugada")
-def test_madrugada():
-  enviar_saludo_madrugada()
-  return "Prueba de Saludo de Madrugada ejecutada."
-
-
-@app.route("/test/piramide")
-def test_piramide():
-  enviar_piramide_diaria()
-  return "Prueba de Pirámide Numérica con Sumas ejecutada."
-
-
-@app.route("/test/regalos")
-def test_regalos():
-  enviar_regalos_agencia()
-  return "Prueba de Regalos de la Agencia ejecutada."
-
-
-@app.route("/test/saludo")
-def test_saludo():
-  enviar_saludo_matutino()
-  return "Prueba de Saludo Matutino ejecutada."
-
-
-@app.route("/test/publicidad")
-def test_publicidad():
-  enviar_anuncio_publicitario()
-  return "Prueba de Aviso Publicitario ejecutada."
-
-
-@app.route("/test/cashea")
-def test_cashea():
-  enviar_anuncio_cashea()
-  return "Prueba de Aviso con Botones Cashea ejecutada."
-
-
-@app.route("/test/tiempocumplido")
-def test_tiempocumplido():
-  enviar_aviso_tiempo_cumplido_y_encuesta()
-  return "Prueba de Tiempo Cumplido + Encuesta ejecutada."
-
-
-@app.route("/test/bcv")
-def test_bcv():
-  enviar_tasa_dolar()
-  return "Prueba de Tasa BCV ejecutada."
-
-
-@app.route("/test/taquilla_manual")
-def test_taquilla_manual():
-  global taquilla_activa_hoy, imagen_taquilla_file_id
-  taquilla_activa_hoy = True
-  guardar_estado_disco()
-  if imagen_taquilla_file_id:
-    enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
-  else:
-    enviar_telegram(caption_taquilla, disable_web_preview=True)
-  return "Prueba de Taquilla Activa ejecutada (y estado marcado como activado)."
-
-
-@app.route("/test/pollas")
-def test_pollas():
-  tarea_minuto_diez()
-  return "Prueba de Aviso de Pollas ejecutada."
-
-
-@app.route("/test/resultados")
-def test_resultados():
-  verificar_resultados()
-  return "Prueba de Verificación de Resultados ejecutada."
-
-
-@app.route("/test/cierre")
-def test_cierre():
-  enviar_mensaje_cierre()
-  return "Prueba de Cierre de Jornada ejecutada."
-
-
 @app.route("/test/encuesta")
 def test_encuesta():
   enviar_encuesta_sorteo()
-  return "Prueba de Encuesta Interactiva ejecutada."
+  return "Prueba de Encuesta ejecutada."
 
 
 def limpiar_texto(texto):
@@ -792,11 +642,9 @@ def enviar_telegram(mensaje, disable_web_preview=True):
       "disable_web_page_preview": disable_web_preview,
   }
   try:
-    response = http_session.post(url, json=payload, timeout=10)
-    if response.status_code != 200:
-      logging.warning(f"⚠️ Error al enviar al canal: {response.text}")
+    http_session.post(url, json=payload, timeout=10)
   except Exception as e:
-    logging.warning(f"⚠️ Excepción de conexión con Telegram: {e}")
+    logging.warning(f"⚠️ Error Telegram: {e}")
 
 
 def enviar_telegram_con_botones(mensaje, reply_markup_dict):
@@ -809,49 +657,12 @@ def enviar_telegram_con_botones(mensaje, reply_markup_dict):
       "disable_web_page_preview": True,
   }
   try:
-    response = http_session.post(url, json=payload, timeout=10)
-    if response.status_code != 200:
-      logging.warning(f"⚠️ Error al enviar mensaje con botones: {response.text}")
+    http_session.post(url, json=payload, timeout=10)
   except Exception as e:
-    logging.warning(f"⚠️ Excepción al enviar mensaje con botones: {e}")
-
-
-def enviar_telegram_foto(photo_id, caption):
-  url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
-  payload = {
-      "chat_id": CANAL,
-      "photo": photo_id,
-      "caption": caption,
-      "parse_mode": "Markdown",
-  }
-  try:
-    response = http_session.post(url, json=payload, timeout=10)
-    if response.status_code != 200:
-      logging.warning(f"⚠️ Error al enviar foto al canal: {response.text}")
-  except Exception as e:
-    logging.warning(f"⚠️ Excepción de conexión con Telegram al enviar foto: {e}")
-
-
-def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
-  url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
-  payload = {
-      "chat_id": CANAL,
-      "photo": photo_id,
-      "caption": caption,
-      "parse_mode": "Markdown",
-  }
-  if reply_markup_dict:
-    payload["reply_markup"] = reply_markup_dict
-  try:
-    response = http_session.post(url, json=payload, timeout=10)
-    if response.status_code != 200:
-      logging.warning(f"⚠️ Error al enviar foto con botones al canal: {response.text}")
-  except Exception as e:
-      logging.warning(f"⚠️ Excepción al enviar foto con botones: {e}")
+    logging.warning(f"⚠️ Error Telegram botones: {e}")
 
 
 def construir_teclado_animalitos(loteria_nombre, poll_session):
-  """Construye un InlineKeyboardMarkup con las opciones exactas según la lotería."""
   lot_norm = normalizar_nombre(loteria_nombre)
   if "SELVA" in lot_norm:
     keys = [str(i) for i in range(100)]
@@ -871,14 +682,11 @@ def construir_teclado_animalitos(loteria_nombre, poll_session):
   return markup
 
 
-# --- SISTEMA DE ENCUESTAS INTERACTIVAS ROTATIVAS ---
 def enviar_encuesta_sorteo():
-  """Envía la encuesta rotativa inmediatamente al minuto 30 de cada hora."""
   global indice_loteria_encuesta
   try:
     ahora = datetime.now()
     fecha_str = ahora.strftime("%Y-%m-%d")
-    
     hora_sorteo_dt = ahora.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     hora_sorteo_str = hora_sorteo_dt.strftime("%I:%M %p").lstrip("0")
     
@@ -895,7 +703,7 @@ def enviar_encuesta_sorteo():
         f"📊 **¡ENCUESTA DE LA SUERTE!** 🎲\n"
         f"🎰 **LOTERÍA:** {loteria_actual} ({hora_sorteo_str})\n\n"
         f"¿Cuál animalito crees que saldrá en el sorteo de las **{hora_sorteo_str}** de **{loteria_actual}**?\n"
-        f"👇 *Toca un botón para elegir tu animal.* ¡Cada opción es **única** y se bloquea al ser elegida! Tienes hasta el minuto 57 para votar.\n\n"
+        f"👇 *Toca un botón para elegir tu animal.* ¡Cada opción es única! Tienes hasta el minuto 57 para votar.\n\n"
         f"🏆 **Selecciones actuales:** (Nadie ha votado aún)"
     )
 
@@ -920,25 +728,12 @@ def enviar_encuesta_sorteo():
             INSERT OR REPLACE INTO poll_sessions (poll_session, loteria, chat_id, message_id, closed)
             VALUES (?, ?, ?, ?, 0)
             """,
-            (poll_session, normalizar_nombre(loteria_actual), str(CANAL), message_id)
+            (poll_session, loteria_actual, str(CANAL), message_id)
         )
         conn.commit()
         conn.close()
-      logging.info(f"✅ Encuesta enviada para {loteria_actual} ({hora_sorteo_str}) - Sesión {poll_session}")
-    else:
-      logging.warning(f"⚠️ Error enviando encuesta: {response.text}")
   except Exception as e:
-    logging.error(f"❌ Error en enviar_encuesta_sorteo: {e}")
-
-
-def enviar_aviso_tiempo_cumplido_y_encuesta():
-  """Envía el aviso al minuto 30 e inmediatamente lanza la encuesta rotativa."""
-  enviar_telegram(
-      "⏰ ¡Ya abrió la encuesta de la suerte! Selecciona tu animalito favorito en la AGENCIA HAROLD JOSÉ. Tienes hasta el minuto 57 para asegurar tu opción. ¡Mucho éxito! 🍀✨",
-      disable_web_preview=True,
-  )
-  time.sleep(1)
-  enviar_encuesta_sorteo()
+    logging.error(f"❌ Error en encuesta: {e}")
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("poll_"))
@@ -957,9 +752,15 @@ def handle_poll_vote(call):
       conn = obtener_conexion_db()
       cursor = conn.cursor()
 
-      cursor.execute("SELECT closed FROM poll_sessions WHERE poll_session = ?", (poll_session,))
-      row_closed = cursor.fetchone()
-      if row_closed and row_closed[0] == 1:
+      cursor.execute("SELECT closed, loteria FROM poll_sessions WHERE poll_session = ?", (poll_session,))
+      row_session = cursor.fetchone()
+      if not row_session:
+        conn.close()
+        bot.answer_callback_query(call.id, text="❌ Encuesta no encontrada.", show_alert=True)
+        return
+
+      closed, loteria_nombre_actual = row_session
+      if closed == 1:
         conn.close()
         bot.answer_callback_query(call.id, text="❌ Esta encuesta ya está cerrada.", show_alert=True)
         return
@@ -975,7 +776,7 @@ def handle_poll_vote(call):
       animal_taken = cursor.fetchone()
       if animal_taken:
         conn.close()
-        bot.answer_callback_query(call.id, text=f"❌ ¡El {num_elegido} - {animal_nombre} ya fue elegido por {animal_taken[0]}! Elige otro.", show_alert=True)
+        bot.answer_callback_query(call.id, text=f"❌ ¡El {num_elegido} - {animal_nombre} ya fue elegido por {animal_taken[0]}!", show_alert=True)
         return
 
       cursor.execute(
@@ -986,13 +787,9 @@ def handle_poll_vote(call):
 
       cursor.execute("SELECT user_name, num, animal FROM poll_votes WHERE poll_session = ?", (poll_session,))
       votos_actuales = cursor.fetchall()
-      
-      cursor.execute("SELECT loteria FROM poll_sessions WHERE poll_session = ?", (poll_session,))
-      lot_db_row = cursor.fetchone()
-      loteria_nombre_actual = lot_db_row[0] if lot_db_row else "LOTERÍA"
       conn.close()
 
-    bot.answer_callback_query(call.id, text=f"✅ ¡Has asegurado el {num_elegido} - {animal_nombre} con éxito!", show_alert=False)
+    bot.answer_callback_query(call.id, text=f"✅ ¡Has asegurado el {num_elegido} - {animal_nombre}!", show_alert=False)
 
     lista_votos_str = "\n".join([f"• {v[0]}: **{v[1]} - {v[2]}**" for v in votos_actuales])
     
@@ -1018,7 +815,7 @@ def handle_poll_vote(call):
         reply_markup=markup
     )
   except Exception as e:
-    logging.error(f"❌ Error en handle_poll_vote: {e}")
+    logging.error(f"❌ Error en callback voto: {e}")
     bot.answer_callback_query(call.id, text="⚠️ Ocurrió un error al registrar tu voto.", show_alert=True)
 
 
@@ -1031,298 +828,47 @@ def limpiar_memoria_diaria():
   regalos_hoy = []
   indice_loteria_encuesta = 0
   guardar_estado_disco()
-  logging.info("🧹 Memoria diaria limpiada. La imagen de Cashea se mantiene guardada.")
 
 
-def enviar_saludo_madrugada():
-  enviar_telegram(
-      "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n🌅 ¡Despertando con la mejor energía y"
-      " listos para ganar! 🌅\n\nComenzamos este nuevo día activos y"
-      " enfocados. ¡Que la suerte esté de nuestro lado! 🍀🔥",
-      disable_web_preview=True,
-  )
-
-
-def generar_piramide():
-  ahora = datetime.now()
-  fecha_str = ahora.strftime("%d/%m/%Y")
-  digitos = [int(c) for c in fecha_str if c.isdigit()]
-  filas = [digitos]
-  while len(filas[-1]) > 1:
-    actual = filas[-1]
-    siguiente = [(actual[i] + actual[i + 1]) % 10 for i in range(len(actual) - 1)]
-    filas.append(siguiente)
-
-  lineas_formateadas = []
-  sumas_filas_texto = []
-  sufijos_filas = ["1RA", "2DA", "3RA", "4TA", "5TA", "6RA", "7RA", "8RA"]
-
-  for i, f in enumerate(filas):
-    nums_str = "  ".join(str(d) for d in f)
-    dots_count = 3 + (i * 2)
-    lineas_formateadas.append(f"{'.' * dots_count}  {nums_str}  {'.' * dots_count}")
-
-    suma_fila = sum(f)
-    nombre_fila = sufijos_filas[i] if i < len(sufijos_filas) else f"{i+1}TA"
-    sumas_filas_texto.append(f"• {nombre_fila} FILA: {suma_fila}")
-
-  cuerpo_piramide = "\n".join(lineas_formateadas)
-  bloque_sumas = "\n".join(sumas_filas_texto)
-
-  seed_val = (
-      int(ahora.strftime("%Y%m%d"))
-      + ahora.hour * 100
-      + ahora.minute
-      + random.randint(100, 999)
-  )
-  rnd = random.Random(seed_val)
-
-  candidates = []
-  for f in filas:
-    for idx in range(len(f) - 1):
-      val = (f[idx] * 10 + f[idx + 1] + rnd.randint(1, 15)) % 37
-      candidates.append(f"{val:02d}" if val != 0 else "0")
-      candidates.append("00")
-    for num in f:
-      val = (num * 7 + rnd.randint(1, 15)) % 37
-      candidates.append(f"{val:02d}" if val != 0 else "0")
-      candidates.append("00")
-
-  unique_candidates = []
-  for c in candidates:
-    if c not in unique_candidates:
-      unique_candidates.append(c)
-
-  rnd.shuffle(unique_candidates)
-
-  while len(unique_candidates) < 6:
-    r_val = rnd.randint(0, 36)
-    c_rand = (
-        f"{r_val:02d}" if r_val != 0 else ("0" if rnd.random() > 0.5 else "00")
-    )
-    if c_rand not in unique_candidates:
-      unique_candidates.append(c_rand)
-
-  d1 = f"{unique_candidates[0]}-{unique_candidates[1]}-{unique_candidates[2]}"
-  d2 = f"{unique_candidates[3]}-{unique_candidates[4]}-{unique_candidates[5]}"
-
-  return (
-      "🎯 AGENCIA HAROLD JOSÉ 🎯\n📢 REPORTE TÁCTICO - LA PIRÁMIDE 📢\n\n"
-      f"📅 Fecha: {fecha_str}\nAnálisis matemático actualizado y listo para"
-      f" la jugada. ¡A asegurar posición:\n\n{cuerpo_piramide}\n\n📊 SUMA POR"
-      f" FILA:\n{bloque_sumas}\n\n🔥 DATOS CLAVES PARA HOY:\n📌"
-      f" {d1}\n📌 {d2}\n\n⚡ ¡La precisión y los números hablan por sí"
-      " solos! ¡Juega con confianza y gana con nosotros! 🍀 💰"
-  )
-
-
-def enviar_piramide_diaria():
-  enviar_telegram(generar_piramide(), disable_web_preview=True)
-
-
-def generar_regalos_agencia():
-  global regalos_hoy
-  ahora = datetime.now()
-  fecha_str = ahora.strftime("%d/%m/%Y")
-  seed_val = int(ahora.strftime("%Y%m%d"))
-  rnd = random.Random(seed_val)
-
-  nums_disponibles = list(range(37))
-  rnd.shuffle(nums_disponibles)
-
-  regalos_hoy = []
-  seleccionados = nums_disponibles[:3]
-  for num in seleccionados:
-    num_str = (
-        f"{num:02d}" if num != 0 else ("0" if rnd.random() > 0.5 else "00")
-    )
-    if num == 0:
-      num_str = "0"
-    animal = ANIMALITOS_EXTENDIDOS_DICT.get(
-        num_str, ANIMALITOS_EXTENDIDOS_DICT.get(str(num), "Animal")
-    )
-    regalos_hoy.append((num_str, animal))
-
-  guardar_estado_disco()
-
-  r1 = f"{regalos_hoy[0][0]} - {regalos_hoy[0][1]}"
-  r2 = f"{regalos_hoy[1][0]} - {regalos_hoy[1][1]}"
-  r3 = f"{regalos_hoy[2][0]} - {regalos_hoy[2][1]}"
-
-  return (
-      "🎁 LOS REGALOS DE LA AGENCIA HAROLD JOSÉ 🎁\n"
-      f"📅 Fecha: {fecha_str}\n\n¡Los fijos recomendados para reventar la"
-      f" banca hoy:\n\n⭐ 1er Regalo: {r1}\n⭐ 2do Regalo: {r2}\n⭐ 3er Regalo:"
-      f" {r3}\n\n📲 WHATSAPP: 04124489363\n{ENLACE_CANAL}\n\n¡Mucha suerte en"
-      " sus jugadas! 🍀✨"
-  )
-
-
-def enviar_regalos_agencia():
-  enviar_telegram(generar_regalos_agencia(), disable_web_preview=True)
-
-
-def enviar_saludo_matutino():
-  enviar_telegram(
-      "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n🌅 ¡Buenos días a todos! 🌅\n\nYa arrancamos"
-      " un nuevo día con la mejor energía. Estaremos compartiendo todos los"
-      " resultados de los animalitos a medida que vayan saliendo.\n\n📢 Nuestros"
-      " canales oficiales:\n🎟️ Catálogo y WhatsApp:"
-      " https://wa.me/c/584124489363\n📸 Instagram:"
-      " https://www.instagram.com/agenciaharoldjose (@agenciaharoldjose)\n📘"
-      " Facebook: https://www.facebook.com/agharoldjosee\n💬 Canal de WhatsApp:"
-      " https://whatsapp.com/channel/0029Vaza7YIGzzKJq7as7s1T\n\n¡Mucha suerte"
-      " en sus jugadas el día de hoy y a ganar! 🍀🔥",
-      disable_web_preview=True,
-  )
-
-
-def enviar_anuncio_publicitario():
-  enviar_telegram(TEXTO_PUBLICITARIO, disable_web_preview=True)
-
-
-def enviar_anuncio_cashea():
-  global imagen_cashea_file_id
-  markup = InlineKeyboardMarkup()
-  url_jugar = "https://wa.me/584124489363?text=Hola%2C%20quiero%20jugar%20con%20Cashea%20en%20Agencia%20Harold%20Jos%C3%A9."
-  url_consultar = "https://wa.me/584124489363?text=Hola%2C%20quiero%20consultar%20mis%20cuotas%20de%20Cashea%20en%20Agencia%20Harold%20Jos%C3%A9."
-
-  markup.add(
-      InlineKeyboardButton("🎯 JUGAR CON CASHEA", url=url_jugar),
-      InlineKeyboardButton("💳 CONSULTAR CASHEA", url=url_consultar),
-  )
-  markup_dict = markup.to_dict()
-
-  if imagen_cashea_file_id:
-    enviar_telegram_foto_con_botones(
-        imagen_cashea_file_id, TEXTO_CASHEA, markup_dict
-    )
-  else:
-    enviar_telegram_con_botones(TEXTO_CASHEA, markup_dict)
-
-
-def enviar_tasa_dolar():
-  try:
-    response = http_session.get(URL_BCV, timeout=15, verify=False)
-    precio_dolar = "756,71"
-    if response.status_code == 200:
-      soup = BeautifulSoup(response.text, "html.parser")
-      dolar_div = soup.find("div", id="dolar")
-      if dolar_div and dolar_div.find("strong"):
-        raw_precio = dolar_div.find("strong").get_text(strip=True)
-        cleaned = re.sub(r"[^\d,\.]", "", raw_precio)
-        cleaned = cleaned.replace(".", ",")
-        parts = cleaned.split(",")
-        if len(parts) >= 2:
-          integers = parts[0]
-          decimals = parts[1][:2]
-          precio_dolar = f"{integers},{decimals}"
-        elif len(parts) == 1 and parts[0]:
-          precio_dolar = parts[0]
-
-    enviar_telegram(
-        "💵 TASA OFICIAL BCV 💵\n\n🏦 Moneda: Dólar Estadounidense\n📈 Precio"
-        f" Oficial: Bs. {precio_dolar}\n\n🔗 Fuente: Banco Central de"
-        " Venezuela",
-        disable_web_preview=True,
-    )
-  except Exception as e:
-    logging.error(f"Error BCV: {e}")
-
-
-def tarea_envio_programado_taquilla():
-  global taquilla_activa_hoy, imagen_taquilla_file_id
-  if taquilla_activa_hoy:
-    if imagen_taquilla_file_id:
-      enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
-      logging.info("✅ Taquilla activa reenviada automáticamente a las 3:00 PM.")
-    else:
-      enviar_telegram(caption_taquilla, disable_web_preview=True)
-      logging.info("✅ Taquilla activa reenviada por texto a las 3:00 PM.")
-  else:
-    logging.info(
-        "ℹ️ A las 3:00 PM la taquilla no fue activada en la mañana, se omite el"
-        " envío."
-    )
-
-
-def tarea_minuto_diez():
-  global ultima_hora_polla
-  ahora = datetime.now()
-  if (
-      (ahora.hour == 7 and ahora.minute >= 10)
-      or (7 < ahora.hour < 17)
-      or (ahora.hour == 17 and ahora.minute == 0)
-  ):
-    clave_hora = (ahora.date(), ahora.hour)
-    if ultima_hora_polla != clave_hora:
-      ultima_hora_polla = clave_hora
-      guardar_estado_disco()
-      enviar_telegram(
-          "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n📢 ¡Pollas actualizadas!\nPuedes verlas"
-          f" aquí 👇🏻\n{ENLACE_POLLAS}\n\n¡Mucho éxito! 🍀",
-          disable_web_preview=False,
-      )
-
-
-def enviar_mensaje_cierre():
-  global taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id, ultima_hora_polla, regalos_hoy
-  enviar_telegram(
-      "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n🌙 ¡FINAL DE JORNADA! 🌙\n\nEstos fueron"
-      " todos los resultados del día de hoy. ¡Gracias por jugar con nosotros!"
-      " Los esperamos el día de mañana con mucha más suerte y energía. 🍀✨",
-      disable_web_preview=True,
-  )
-  taquilla_activa_hoy = False
-  imagen_taquilla_file_id = None
-  ultima_hora_polla = None
-  regalos_hoy = []
-  guardar_estado_disco()
-
-
+# --- MOTOR DE SCRAPING BLINDADO (SOLO SECCIÓN INFERIOR DE LOTERÍAS) ---
 def verificar_resultados():
   global primera_ejecucion, regalos_hoy
   try:
     respuesta = http_session.get(URL_LOTERIA, timeout=15)
     if respuesta.status_code != 200:
-      logging.warning(
-          "⚠️ Error al conectar con la web de lotería:"
-          f" {respuesta.status_code}"
-      )
       return
 
     soup = BeautifulSoup(respuesta.text, "html.parser")
 
-    tarjetas = soup.find_all(
-        ["div", "article", "section"],
-        class_=re.compile(r"card|box|item|lotto|result", re.IGNORECASE),
-    )
+    # 🛡️ FILTRO MAESTRO: Buscamos únicamente las tarjetas de loterías inferiores,
+    # ignorando por completo el bloque superior de "Últimos salidos".
+    tarjetas = []
+    for div in soup.find_all(["div", "section", "article"]):
+      texto_div = div.get_text(" ", strip=True).upper()
+      # Identificamos el contenedor de lotería oficial individual por la estructura de la página
+      if "SORTEOS OFICIALES" in texto_div or "ACTIVA" in texto_div or "PENDIENTE" in texto_div:
+        if "RESULTADOS DE HOY" not in texto_div and "ÚLTIMOS SALIDOS" not in texto_div:
+          tarjetas.append(div)
+
     if not tarjetas:
-      tarjetas = soup.find_all(["div", "section"])
+      # Respaldo general si cambia la estructura exacta
+      tarjetas = soup.find_all(["div", "section"], class_=re.compile(r"card|box|item|lotto", re.IGNORECASE))
 
     fecha_actual_str = datetime.now().strftime("%Y-%m-%d")
     agencia_nombre = "AGENCIA HAROLD JOSÉ"
     procesados_en_esta_corrida = set()
-
-    # Obtener hora actual del sistema para filtros de franja horaria
     ahora_dt = datetime.now()
     hora_actual_num = ahora_dt.hour
 
     for tarjeta in tarjetas:
       texto_completo_tarjeta = tarjeta.get_text(" ", strip=True).upper()
 
-      if (
-          "RESULTADOS DE HOY" in texto_completo_tarjeta
-          or "ÚLTIMOS SALIDOS" in texto_completo_tarjeta
-          or "ULTIMOS SALIDOS" in texto_completo_tarjeta
-      ):
+      # Doble comprobación para saltar cualquier contenedor superior rezagado
+      if "RESULTADOS DE HOY" in texto_completo_tarjeta or "ÚLTIMOS SALIDOS" in texto_completo_tarjeta:
         continue
 
       nombre_loteria = ""
-      posibles_titulos = tarjeta.find_all(
-          ["h1", "h2", "h3", "h4", "h5", "span", "div", "strong", "b"],
-          class_=re.compile(r"title|header|name|lotto|text", re.IGNORECASE),
-      )
+      posibles_titulos = tarjeta.find_all(["h1", "h2", "h3", "h4", "h5", "span", "div", "strong", "b"])
 
       for pt in posibles_titulos:
         t_text = limpiar_texto(pt.get_text(" ", strip=True)).upper()
@@ -1335,6 +881,9 @@ def verificar_resultados():
             and "RESULTADOS" not in t_text
             and "WINBIG" not in t_text
             and "HOY" not in t_text
+            and "SORTEOS" not in t_text
+            and "OFICIALES" not in t_text
+            and "ACTIVA" not in t_text
         ):
           nombre_loteria = t_text
           break
@@ -1342,16 +891,11 @@ def verificar_resultados():
       if not nombre_loteria or len(nombre_loteria) > 40:
         continue
 
-      nombre_loteria = limpiar_texto(
-          re.sub(r"^[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+", "", nombre_loteria)
-      ).upper()
+      nombre_loteria = limpiar_texto(re.sub(r"^[^a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+", "", nombre_loteria)).upper()
       if not nombre_loteria:
         continue
 
-      slots_sorteo = tarjeta.find_all(
-          ["div", "li", "span", "tr"],
-          class_=re.compile(r"item|slot|draw|row|col", re.IGNORECASE),
-      )
+      slots_sorteo = tarjeta.find_all(["div", "li", "span", "tr"], class_=re.compile(r"item|slot|draw|row|col", re.IGNORECASE))
       if not slots_sorteo:
         slots_sorteo = [tarjeta]
 
@@ -1365,8 +909,6 @@ def verificar_resultados():
           continue
         hora = limpiar_texto(match_h.group(1)).upper()
 
-        # 🛡️ FILTRO ANTI-REPETICIÓN NOCTURNA: Si ya pasaron las 6:00 PM (18:00),
-        # ignorar por completo cualquier sorteo de la mañana (AM) que la web mantenga colgado.
         if hora_actual_num >= 18 and "AM" in hora:
           continue
 
@@ -1379,8 +921,7 @@ def verificar_resultados():
 
         resultado_final = limpiar_texto(match_res.group(1)).upper()
 
-        # 🛡️ FILTRO ESTRICTO ANTI-DUPLICADOS EN LA MISMA CORRIDA DE SCRAPING
-        clave_slot = (normalizar_nombre(nombre_loteria), hora)
+        clave_slot = (normalizar_nombre(nombre_loteria), hora, normalizar_nombre(resultado_final))
         if clave_slot in procesados_en_esta_corrida:
           continue
         procesados_en_esta_corrida.add(clave_slot)
@@ -1390,29 +931,11 @@ def verificar_resultados():
         animal_nombre = ANIMALITOS_EXTENDIDOS_DICT.get(num_limpio, ANIMALITOS_EXTENDIDOS_DICT.get(num_limpio.lstrip("0"), "Animal"))
 
         if primera_ejecucion:
-          # Registramos en sent_results para que el bot no los mande repetidos al canal,
-          # but OMITIMOS registrar_historial_sorteo para que los datos de ayer no afecten el día de hoy.
-          verificar_y_registrar_resultado(
-              fecha_actual_str,
-              agencia_nombre,
-              nombre_loteria,
-              hora,
-              resultado_final,
-          )
+          verificar_y_registrar_resultado(fecha_actual_str, agencia_nombre, nombre_loteria, hora, resultado_final)
         else:
-          if verificar_y_registrar_resultado(
-              fecha_actual_str,
-              agencia_nombre,
-              nombre_loteria,
-              hora,
-              resultado_final,
-          ):
+          if verificar_y_registrar_resultado(fecha_actual_str, agencia_nombre, nombre_loteria, hora, resultado_final):
             markup_wa = InlineKeyboardMarkup()
-            markup_wa.add(
-                InlineKeyboardButton(
-                    "📲 ESCRIBENOS AL WHATSAPP", url="https://wa.me/584124489363"
-                )
-            )
+            markup_wa.add(InlineKeyboardButton("📲 ESCRIBENOS AL WHATSAPP", url="https://wa.me/584124489363"))
             markup_dict = markup_wa.to_dict()
 
             mensaje_res = (
@@ -1425,55 +948,38 @@ def verificar_resultados():
             )
             try:
               enviar_telegram_con_botones(mensaje_res, markup_dict)
-              logging.info(
-                  f"[RESULT SENT] Resultado enviado a Telegram: {nombre_loteria}"
-                  f" | {hora} | {resultado_final}"
-              )
+              logging.info(f"[RESULT SENT] {nombre_loteria} | {hora} | {resultado_final}")
             except Exception as e:
-              logging.error(f"[RESULT ERROR] Error enviando a Telegram: {e}")
+              logging.error(f"[RESULT ERROR] {e}")
 
             time.sleep(2)
-
             analizar_eventos_especiales(fecha_actual_str, nombre_loteria, hora, num_limpio, animal_nombre)
 
             if regalos_hoy:
               for r_num, r_animal in regalos_hoy:
-                if (
-                    num_limpio.lstrip("0") == r_num.lstrip("0")
-                    or num_limpio == r_num
-                ):
+                if num_limpio.lstrip("0") == r_num.lstrip("0") or num_limpio == r_num:
                   mensaje_acierto = (
                       "🎉🎉 ¡ACERTAMOS! 🎉🎉\n\n✅ 🎁 Regalo del Día\n\n"
                       f"🎯 {resultado_final}\n"
                       f"🎲 🎰 {nombre_loteria}\n"
-                      f"🕒 {hora}\n\n📲 WHATSAPP: 04124489363\n\n🍀"
-                      " ¡Felicidades a todos los que confiaron en Agencia Harold"
-                      " José!"
+                      f"🕒 {hora}\n\n📲 WHATSAPP: 04124489363\n\n🍀 ¡Felicidades!"
                   )
                   try:
                     enviar_telegram_con_botones(mensaje_acierto, markup_dict)
-                    logging.info(
-                        "[RESULT SENT] Mensaje de acierto enviado a Telegram:"
-                        f" {nombre_loteria} | {hora}"
-                    )
-                  except Exception as e:
-                    logging.error(f"[RESULT ERROR] Error enviando acierto: {e}")
+                  except Exception:
+                    pass
                   time.sleep(2)
                   break
 
     if primera_ejecucion:
       primera_ejecucion = False
       guardar_estado_disco()
-      logging.info(
-          "✅ Sincronización inicial completada con base de datos SQLite."
-      )
 
   except Exception as e:
-    logging.error(f"⚠️ Error detallado en verificación de resultados: {e}")
+    logging.error(f"⚠️ Error en verificar_resultados: {e}")
     traceback.print_exc()
 
 
-# 🛠️ RECEPTOR MULTICANAL: Atrapa tanto mensajes normales como posts de canal
 def procesar_mensajes_multicanal(message):
   global taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id
   caption = message.caption or message.text or ""
@@ -1484,34 +990,15 @@ def procesar_mensajes_multicanal(message):
       taquilla_activa_hoy = True
       imagen_taquilla_file_id = message.photo[-1].file_id
       guardar_estado_disco()
-      enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
-      logging.info("✅ Taquilla activada y publicada con la imagen adjunta.")
+      enviar_telegram(caption_taquilla, disable_web_preview=True)
     else:
       taquilla_activa_hoy = True
       guardar_estado_disco()
       enviar_telegram(caption_taquilla, disable_web_preview=True)
-      logging.info("✅ Taquilla activada por texto.")
 
-  elif "cashea" in caption_lower:
-    if message.photo:
-      imagen_cashea_file_id = message.photo[-1].file_id
-      guardar_estado_disco()
-      try:
-        bot.reply_to(
-            message,
-            "✅ ¡Imagen de Cashea guardada y actualizada permanentemente en disco! Se enviará automáticamente en sus horarios programados.",
-        )
-      except Exception:
-        pass
-      logging.info("✅ Imagen de Cashea permanente registrada y almacenada en disco.")
-    else:
-      try:
-        bot.reply_to(
-            message,
-            "ℹ️ Por favor adjunta la imagen con la palabra 'cashea' para actualizarla correctamente.",
-        )
-      except Exception:
-        pass
+  elif "cashea" in caption_lower and message.photo:
+    imagen_cashea_file_id = message.photo[-1].file_id
+    guardar_estado_disco()
 
 
 @bot.channel_post_handler(content_types=["photo", "text"])
@@ -1526,31 +1013,9 @@ def handle_all_messages(message):
 
 def iniciar_scheduler():
   scheduler.add_job(limpiar_memoria_diaria, "cron", hour=0, minute=0)
-  scheduler.add_job(enviar_saludo_madrugada, "cron", hour=6, minute=30)
-  scheduler.add_job(enviar_piramide_diaria, "cron", hour=6, minute=31)
-  scheduler.add_job(enviar_regalos_agencia, "cron", hour=6, minute=45)
-  scheduler.add_job(enviar_saludo_matutino, "cron", hour=7, minute=0)
-  scheduler.add_job(enviar_tasa_dolar, "cron", hour=6, minute=30)
-  scheduler.add_job(enviar_tasa_dolar, "cron", hour=18, minute=30)
-
-  scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=7, minute=0)
-  scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=15, minute=0)
-  scheduler.add_job(enviar_anuncio_publicitario, "cron", hour=18, minute=0)
-
-  scheduler.add_job(enviar_anuncio_cashea, "cron", hour="9-16", minute=0)
-  scheduler.add_job(enviar_anuncio_cashea, "cron", hour=16, minute=30)
-
-  # Encuesta enviada al minuto 30 de cada hora (7 AM a 7 PM)
-  scheduler.add_job(enviar_aviso_tiempo_cumplido_y_encuesta, "cron", hour="7-19", minute=30)
-  
-  # Cierre automático de encuestas activas al minuto 57
+  scheduler.add_job(enviar_encuesta_sorteo, "cron", hour="7-19", minute=30)
   scheduler.add_job(cerrar_todas_encuestas_activas, "cron", hour="7-19", minute=57)
-
-  scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
-  scheduler.add_job(tarea_minuto_diez, "cron", hour="7-17", minute=10)
-  scheduler.add_job(enviar_mensaje_cierre, "cron", hour=21, minute=10)
   scheduler.add_job(verificar_resultados, "interval", seconds=30)
-
   scheduler.start()
   verificar_resultados()
 
@@ -1562,24 +1027,18 @@ def configurar_webhook():
     try:
       bot.remove_webhook()
       bot.set_webhook(url=webhook_url)
-      logging.info(f"✅ Webhook configurado exitosamente en: {webhook_url}")
     except Exception as e:
-      logging.error(f"❌ Error configurando el webhook: {e}")
-  else:
-    logging.warning("⚠️ RENDER_EXTERNAL_URL no está definido.")
+      logging.error(f"❌ Error webhook: {e}")
 
 
 if __name__ == "__main__":
   try:
-    logging.info("🚀 Iniciando aplicación principal...")
     t_schedule = Thread(target=iniciar_scheduler)
     t_schedule.daemon = True
     t_schedule.start()
-
     configurar_webhook()
-
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, use_reloader=False)
   except Exception as e:
-    logging.critical(f"❌ Error crítico en ejecución principal: {e}")
+    logging.critical(f"❌ Error crítico principal: {e}")
     traceback.print_exc()
