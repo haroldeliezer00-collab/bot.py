@@ -36,7 +36,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Credenciales y canal principal configurado
 TOKEN = os.environ.get(
-    "TELEGRAM_TOKEN", "8728747633:AAHakMFznhlpK6QbkZinctgbl131wE2hIeI"
+    "TELEGRAM_TOKEN", "8733552499:AAFL_86sFP2twwGRF1rIXhGeZPRYcOqW8Go"
 )
 CANAL = "@resultadosagharoldjose"  # Canal oficial de producción indicado
 ENLACE_CANAL = "https://t.me/resultadosagharoldjose"
