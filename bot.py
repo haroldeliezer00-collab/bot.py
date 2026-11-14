@@ -10,7 +10,7 @@ import time
 import traceback
 from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
-from flask import Flask
+from flask import Flask, request
 import requests
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -22,6 +22,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler()],
 )
+
+# Silenciar trazas ruidosas de telebot en micro-cortes 502
+logging.getLogger("TeleBot").setLevel(logging.CRITICAL)
 
 # Forzar la zona horaria de Venezuela de forma segura
 os.environ["TZ"] = "America/Caracas"
@@ -454,22 +457,68 @@ def home():
       f"¡El bot de resultados de la AGENCIA HAROLD JOSÉ está activo en el canal"
       f" oficial {CANAL}!<br><br><b>Estado del aviso de taquilla de hoy:</b>"
       f" {estado_tag}<br><b>Estado de la imagen de Cashea:</b>"
-      f" {cashea_tag}<br><br><b>Enlaces de prueba rápida (Test de cada"
-      " opción):</b><br>👉 <a href='/test/madrugada'>Probar Saludo de Madrugada"
-      " (6:30 AM)</a><br>👉 <a href='/test/piramide'>Probar Pirámide Numérica"
-      " con Sumas por Fila (6:31 AM)</a><br>👉 <a href='/test/regalos'>Probar"
-      " Regalos de la Agencia (6:45 AM)</a><br>👉 <a href='/test/saludo'>Probar"
-      " Saludo Matutino (7:00 AM)</a><br>👉 <a href='/test/publicidad'>Probar"
-      " Aviso Publicitario (7am/3pm/6pm)</a><br>👉 <a"
-      " href='/test/cashea'>Probar Aviso con Botones Cashea (9am a 4:30"
-      " pm)</a><br>👉 <a href='/test/tiempocumplido'>Probar Tiempo Cumplido"
-      " (Minuto 55)</a><br>👉 <a href='/test/bcv'>Probar Tasa Oficial"
-      " BCV</a><br>👉 <a href='/test/taquilla_manual'>Probar Envío Manual de"
-      " Taquilla Activa</a><br>👉 <a href='/test/pollas'>Probar Aviso de Pollas"
-      " (Minuto 10)</a><br>👉 <a href='/test/resultados'>Forzar Revisión de"
-      " Resultados Individuales</a><br>👉 <a href='/test/cierre'>Probar Mensaje"
-      " de Cierre (9:10 PM)</a>"
+      f" {cashea_tag}<br><br>"
+      "<b>Subir Imagen Directa (Alternativa rápida desde web):</b><br>"
+      "<form action='/subir_imagen' method='post' enctype='multipart/form-data'>"
+      "<select name='tipo'><option value='cashea'>Imagen Cashea (Permanente)</option>"
+      "<option value='taquilla'>Imagen Taquilla Activa (Hoy + 3PM)</option></select> "
+      "<input type='file' name='foto' accept='image/*' required> "
+      "<button type='submit'>Guardar y Publicar</button></form><br>"
+      "<b>Enlaces de prueba rápida (Test de cada opción):</b><br>"
+      "👉 <a href='/test/madrugada'>Probar Saludo de Madrugada (6:30 AM)</a><br>"
+      "👉 <a href='/test/piramide'>Probar Pirámide Numérica con Sumas por Fila (6:31 AM)</a><br>"
+      "👉 <a href='/test/regalos'>Probar Regalos de la Agencia (6:45 AM)</a><br>"
+      "👉 <a href='/test/saludo'>Probar Saludo Matutino (7:00 AM)</a><br>"
+      "👉 <a href='/test/publicidad'>Probar Aviso Publicitario (7am/3pm/6pm)</a><br>"
+      "👉 <a href='/test/cashea'>Probar Aviso con Botones Cashea (9am a 4:30 pm)</a><br>"
+      "👉 <a href='/test/tiempocumplido'>Probar Tiempo Cumplido (Minuto 55)</a><br>"
+      "👉 <a href='/test/bcv'>Probar Tasa Oficial BCV</a><br>"
+      "👉 <a href='/test/taquilla_manual'>Probar Envío Manual de Taquilla Activa</a><br>"
+      "👉 <a href='/test/pollas'>Probar Aviso de Pollas (Minuto 10)</a><br>"
+      "👉 <a href='/test/resultados'>Forzar Revisión de Resultados Individuales</a><br>"
+      "👉 <a href='/test/cierre'>Probar Mensaje de Cierre (9:10 PM)</a>"
   )
+
+
+@app.route("/subir_imagen", methods=["POST"])
+def subir_imagen():
+  global imagen_cashea_file_id, imagen_taquilla_file_id, taquilla_activa_hoy
+  tipo = request.form.get("tipo")
+  foto = request.files.get("foto")
+  if not foto:
+    return "No seleccionaste ninguna imagen.", 400
+
+  url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
+  caption_tmp = (
+      caption_taquilla if tipo == "taquilla" else "Actualizando imagen Cashea..."
+  )
+  files = {"photo": (foto.filename, foto.read(), foto.content_type)}
+  data = {"chat_id": CANAL, "caption": caption_tmp}
+
+  resp = http_session.post(url, data=data, files=files, timeout=30).json()
+  if not resp.get("ok"):
+    return f"Error subiendo a Telegram: {resp}", 500
+
+  file_id = resp["result"]["photo"][-1]["file_id"]
+  msg_id = resp["result"]["message_id"]
+
+  if tipo == "cashea":
+    imagen_cashea_file_id = file_id
+    guardar_estado_disco()
+    guardar_respaldo_en_telegram("cashea", file_id)
+    # Borrar el mensaje temporal del canal para dejarlo limpio
+    http_session.post(
+        f"https://api.telegram.org/bot{TOKEN}/deleteMessage",
+        json={"chat_id": CANAL, "message_id": msg_id},
+        timeout=15,
+    )
+    return "✅ ¡Imagen de Cashea guardada permanentemente en la nube! <a href='/'>Volver</a>"
+  else:
+    taquilla_activa_hoy = True
+    imagen_taquilla_file_id = file_id
+    guardar_estado_disco()
+    guardar_respaldo_en_telegram("taquilla", file_id)
+    return "✅ ¡Taquilla Activa publicada en el canal y programada para las 3:00 PM! <a href='/'>Volver</a>"
 
 
 @app.route("/test/madrugada")
@@ -1244,18 +1293,28 @@ def iniciar_scheduler():
 
 
 def iniciar_polling():
-  """Escucha mensajes y fotos directamente de Telegram sin depender de setWebhook."""
+  """Escucha actualizaciones directamente con getUpdates sin bloquearse en get_me()."""
+  offset = 0
+  logging.info("📡 Escuchando mensajes y fotos en modo Polling directo...")
   while True:
     try:
-      try:
-        bot.remove_webhook()
-      except Exception:
-        pass
-      logging.info("📡 Escuchando mensajes y fotos en modo Polling...")
-      bot.infinity_polling(timeout=30, long_polling_timeout=20)
-    except Exception as e:
-      logging.warning(f"⚠️ Micro-corte en Polling ({e}), reconectando en 5s...")
-      time.sleep(5)
+      url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
+      resp = http_session.get(
+          url, params={"offset": offset, "timeout": 25}, timeout=35
+      )
+      if resp.status_code == 200:
+        data = resp.json()
+        if data.get("ok"):
+          updates = [
+              telebot.types.Update.de_json(u) for u in data.get("result", [])
+          ]
+          if updates:
+            offset = updates[-1].update_id + 1
+            bot.process_new_updates(updates)
+      else:
+        time.sleep(10)
+    except Exception:
+      time.sleep(10)
 
 
 logging.info("🚀 Inicializando servicios de Agencia Harold José...")
