@@ -10,7 +10,7 @@ import time
 import traceback
 from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
-from flask import Flask, request
+from flask import Flask
 import requests
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -41,7 +41,7 @@ CANAL = "@resultadosagharoldjose"
 ENLACE_CANAL = "https://t.me/resultadosagharoldjose"
 ENLACE_POLLAS = "https://t.me/pollasydupletas"
 
-bot = telebot.TeleBot(TOKEN)
+bot = telebot.TeleBot(TOKEN, threaded=False)
 scheduler = BackgroundScheduler(timezone="America/Caracas")
 
 URL_LOTERIA = "https://lotery.winbigvzla.com/resultados"
@@ -470,17 +470,6 @@ def home():
       " Resultados Individuales</a><br>👉 <a href='/test/cierre'>Probar Mensaje"
       " de Cierre (9:10 PM)</a>"
   )
-
-
-# --- RUTAS DE WEBHOOK DE TELEGRAM ---
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-  if request.headers.get("content-type") == "application/json":
-    json_string = request.get_data().decode("utf-8")
-    update = telebot.types.Update.de_json(json_string)
-    bot.process_new_updates([update])
-    return "", 200
-  return "Forbidden", 403
 
 
 @app.route("/test/madrugada")
@@ -1254,39 +1243,27 @@ def iniciar_scheduler():
   verificar_resultados()
 
 
-def configurar_webhook():
-  render_url = os.environ.get("RENDER_EXTERNAL_URL")
-  if not render_url:
-    logging.warning("⚠️ RENDER_EXTERNAL_URL no está definido.")
-    return
-
-  webhook_url = f"{render_url}/{TOKEN}"
-  intento = 1
+def iniciar_polling():
+  """Escucha mensajes y fotos directamente de Telegram sin depender de setWebhook."""
   while True:
     try:
-      bot.remove_webhook()
-      time.sleep(1)
-      bot.set_webhook(url=webhook_url)
-      logging.info(
-          f"✅ Webhook configurado exitosamente en el intento {intento}:"
-          f" {webhook_url}"
-      )
-      break
+      try:
+        bot.remove_webhook()
+      except Exception:
+        pass
+      logging.info("📡 Escuchando mensajes y fotos en modo Polling...")
+      bot.infinity_polling(timeout=30, long_polling_timeout=20)
     except Exception as e:
-      logging.error(
-          f"❌ Error configurando webhook (intento {intento}): {e}. Reintentando"
-          " en 20s..."
-      )
-      intento += 1
-      time.sleep(20)
+      logging.warning(f"⚠️ Micro-corte en Polling ({e}), reconectando en 5s...")
+      time.sleep(5)
 
 
 logging.info("🚀 Inicializando servicios de Agencia Harold José...")
 t_schedule = Thread(target=iniciar_scheduler, daemon=True)
 t_schedule.start()
 
-t_webhook = Thread(target=configurar_webhook, daemon=True)
-t_webhook.start()
+t_polling = Thread(target=iniciar_polling, daemon=True)
+t_polling.start()
 
 if __name__ == "__main__":
   port = int(os.environ.get("PORT", 5000))
