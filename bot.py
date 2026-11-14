@@ -4,18 +4,19 @@ import logging
 import os
 import random
 import re
+import sqlite3
 from threading import Thread
 import time
-database = None
 import traceback
 from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
 from flask import Flask, request
 import requests
-import sqlite3
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 import urllib3
+
+database = None
 
 # Configuración de logging profesional para Render
 logging.basicConfig(
@@ -59,6 +60,7 @@ http_session.headers.update(
 # Control estricto anti-duplicados y memoria
 primera_ejecucion = True
 ultima_hora_polla = None
+scheduler_iniciado = False
 
 taquilla_activa_hoy = False
 imagen_taquilla_file_id = None
@@ -805,7 +807,7 @@ def tarea_minuto_diez():
       guardar_estado_disco()
       enviar_telegram(
           "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n📢 ¡Pollas actualizadas!\nPuedes verlas"
-          f" hier 👇🏻\n{ENLACE_POLLAS}\n\n¡Mucho éxito! 🍀",
+          f" aquí 👇🏻\n{ENLACE_POLLAS}\n\n¡Mucho éxito! 🍀",
           disable_web_preview=False,
       )
 
@@ -1085,6 +1087,11 @@ def handle_channel_posts(message):
 
 
 def iniciar_scheduler():
+  global scheduler_iniciado
+  if scheduler_iniciado:
+    return
+  scheduler_iniciado = True
+
   scheduler.add_job(limpiar_memoria_diaria, "cron", hour=0, minute=0)
   scheduler.add_job(enviar_saludo_madrugada, "cron", hour=6, minute=30)
   scheduler.add_job(enviar_piramide_diaria, "cron", hour=6, minute=31)
@@ -1104,9 +1111,12 @@ def iniciar_scheduler():
   scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
   scheduler.add_job(tarea_minuto_diez, "cron", hour="7-17", minute=10)
   scheduler.add_job(enviar_mensaje_cierre, "cron", hour=21, minute=10)
-  scheduler.add_job(verificar_resultados, "interval", seconds=30)
+  scheduler.add_job(
+      verificar_resultados, "interval", seconds=30, max_instances=1
+  )
 
   scheduler.start()
+  logging.info("✅ Scheduler iniciado correctamente.")
   verificar_resultados()
 
 
@@ -1116,6 +1126,7 @@ def configurar_webhook():
     webhook_url = f"{render_url}/{TOKEN}"
     try:
       bot.remove_webhook()
+      time.sleep(0.5)
       bot.set_webhook(url=webhook_url)
       logging.info(f"✅ Webhook configurado exitosamente en: {webhook_url}")
     except Exception as e:
@@ -1124,17 +1135,12 @@ def configurar_webhook():
     logging.warning("⚠️ RENDER_EXTERNAL_URL no está definido.")
 
 
+# Arrancar siempre los servicios de fondo (compatible con Gunicorn y Python directo)
+logging.info("🚀 Inicializando servicios de Agencia Harold José...")
+t_schedule = Thread(target=iniciar_scheduler, daemon=True)
+t_schedule.start()
+configurar_webhook()
+
 if __name__ == "__main__":
-  try:
-    logging.info("🚀 Iniciando aplicación principal...")
-    t_schedule = Thread(target=iniciar_scheduler)
-    t_schedule.daemon = True
-    t_schedule.start()
-
-    configurar_webhook()
-
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, use_reloader=False)
-  except Exception as e:
-    logging.critical(f"❌ Error crítico en ejecución principal: {e}")
-    traceback.print_exc()
+  port = int(os.environ.get("PORT", 5000))
+  app.run(host="0.0.0.0", port=port, use_reloader=False)
