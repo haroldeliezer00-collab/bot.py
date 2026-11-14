@@ -183,7 +183,6 @@ def es_hora_actual_valida(hora_sorteo_str, tolerancia_minutos=45):
     )
     diferencia_minutos = (ahora - dt_sorteo).total_seconds() / 60.0
 
-    # Debe haber ocurrido ya (o hasta 5 min de adelanto por reloj) y no tener más de 45 min de viejo
     if -5 <= diferencia_minutos <= tolerancia_minutos:
       return True
     return False
@@ -194,61 +193,72 @@ def es_hora_actual_valida(hora_sorteo_str, tolerancia_minutos=45):
 
 def guardar_respaldo_en_telegram(clave, file_id):
   """
-  Guarda el file_id en la nube de Telegram (en los comandos/descripción del bot)
+  Guarda el file_id en la nube de Telegram (en los comandos del bot)
   para que sobreviva a cualquier reinicio de Render sin usar variables externas.
   """
-  try:
-    url_get = f"https://api.telegram.org/bot{TOKEN}/getMyCommands"
-    resp = http_session.get(url_get, timeout=10).json()
-    comandos_actuales = resp.get("result", [])
+  for _ in range(3):
+    try:
+      url_get = f"https://api.telegram.org/bot{TOKEN}/getMyCommands"
+      resp = http_session.get(url_get, timeout=20).json()
+      comandos_actuales = resp.get("result", [])
 
-    # Filtrar comandos previos de esta clave
-    nuevos_comandos = [
-        c for c in comandos_actuales if not c["command"].startswith("img_")
-    ]
+      nuevos_comandos = [
+          c for c in comandos_actuales if not c["command"].startswith("img_")
+      ]
 
-    # Mantener las imágenes guardadas
-    cashea_id = file_id if clave == "cashea" else imagen_cashea_file_id
-    taquilla_id = file_id if clave == "taquilla" else imagen_taquilla_file_id
+      cashea_id = file_id if clave == "cashea" else imagen_cashea_file_id
+      taquilla_id = file_id if clave == "taquilla" else imagen_taquilla_file_id
 
-    if cashea_id:
-      nuevos_comandos.append(
-          {"command": "img_cashea", "description": cashea_id}
+      if cashea_id:
+        nuevos_comandos.append(
+            {"command": "img_cashea", "description": cashea_id}
+        )
+      if taquilla_id:
+        hoy_tag = datetime.now().strftime("%Y%m%d")
+        nuevos_comandos.append({
+            "command": "img_taquilla",
+            "description": f"{hoy_tag}|{taquilla_id}",
+        })
+
+      url_set = f"https://api.telegram.org/bot{TOKEN}/setMyCommands"
+      r_set = http_session.post(
+          url_set, json={"commands": nuevos_comandos}, timeout=20
       )
-    if taquilla_id:
-      hoy_tag = datetime.now().strftime("%Y%m%d")
-      nuevos_comandos.append(
-          {"command": "img_taquilla", "description": f"{hoy_tag}|{taquilla_id}"}
-      )
-
-    url_set = f"https://api.telegram.org/bot{TOKEN}/setMyCommands"
-    http_session.post(url_set, json={"commands": nuevos_comandos}, timeout=10)
-    logging.info(f"☁️ Respaldo en nube de Telegram actualizado para: {clave}")
-  except Exception as e:
-    logging.warning(f"⚠️ No se pudo guardar respaldo en nube Telegram: {e}")
+      if r_set.status_code == 200:
+        logging.info(f"☁️ Respaldo en nube de Telegram actualizado para: {clave}")
+        return
+    except Exception as e:
+      logging.warning(f"⚠️ Reintentando respaldo en nube Telegram ({clave}): {e}")
+      time.sleep(3)
 
 
 def recuperar_respaldo_de_telegram():
   """Recupera automáticamente las fotos guardadas desde Telegram al reiniciar Render."""
   global imagen_cashea_file_id, imagen_taquilla_file_id, taquilla_activa_hoy
-  try:
-    url_get = f"https://api.telegram.org/bot{TOKEN}/getMyCommands"
-    resp = http_session.get(url_get, timeout=10).json()
-    comandos = resp.get("result", [])
-    hoy_tag = datetime.now().strftime("%Y%m%d")
+  for _ in range(3):
+    try:
+      url_get = f"https://api.telegram.org/bot{TOKEN}/getMyCommands"
+      resp = http_session.get(url_get, timeout=20).json()
+      if not resp.get("ok"):
+        time.sleep(3)
+        continue
+      comandos = resp.get("result", [])
+      hoy_tag = datetime.now().strftime("%Y%m%d")
 
-    for c in comandos:
-      if c["command"] == "img_cashea" and c.get("description"):
-        imagen_cashea_file_id = c["description"].strip()
-        logging.info("☁️ Imagen de Cashea recuperada desde Telegram.")
-      elif c["command"] == "img_taquilla" and c.get("description"):
-        partes = c["description"].strip().split("|", 1)
-        if len(partes) == 2 and partes[0] == hoy_tag:
-          imagen_taquilla_file_id = partes[1]
-          taquilla_activa_hoy = True
-          logging.info("☁️ Imagen de Taquilla Activa recuperada desde Telegram.")
-  except Exception as e:
-    logging.warning(f"⚠️ Error recuperando respaldo de Telegram: {e}")
+      for c in comandos:
+        if c["command"] == "img_cashea" and c.get("description"):
+          imagen_cashea_file_id = c["description"].strip()
+          logging.info("☁️ Imagen de Cashea recuperada desde Telegram.")
+        elif c["command"] == "img_taquilla" and c.get("description"):
+          partes = c["description"].strip().split("|", 1)
+          if len(partes) == 2 and partes[0] == hoy_tag:
+            imagen_taquilla_file_id = partes[1]
+            taquilla_activa_hoy = True
+            logging.info("☁️ Imagen de Taquilla Activa recuperada desde Telegram.")
+      return
+    except Exception as e:
+      logging.warning(f"⚠️ Error recuperando respaldo de Telegram: {e}")
+      time.sleep(3)
 
 
 def cargar_estado_disco():
@@ -567,12 +577,20 @@ def enviar_telegram(mensaje, disable_web_preview=True):
       "parse_mode": "Markdown",
       "disable_web_page_preview": disable_web_preview,
   }
-  try:
-    response = http_session.post(url, json=payload, timeout=15)
-    if response.status_code != 200:
-      logging.warning(f"⚠️ Error al enviar al canal: {response.text}")
-  except Exception as e:
-    logging.warning(f"⚠️ Excepción de conexión con Telegram: {e}")
+  for intento in range(1, 4):
+    try:
+      response = http_session.post(url, json=payload, timeout=25)
+      if response.status_code == 200:
+        return True
+      logging.warning(
+          f"⚠️ Error al enviar al canal (intento {intento}/3): {response.text}"
+      )
+    except Exception as e:
+      logging.warning(
+          f"⚠️ Excepción de conexión con Telegram (intento {intento}/3): {e}"
+      )
+    time.sleep(3)
+  return False
 
 
 def enviar_telegram_con_botones(mensaje, reply_markup_dict):
@@ -584,12 +602,21 @@ def enviar_telegram_con_botones(mensaje, reply_markup_dict):
       "reply_markup": reply_markup_dict,
       "disable_web_page_preview": True,
   }
-  try:
-    response = http_session.post(url, json=payload, timeout=15)
-    if response.status_code != 200:
-      logging.warning(f"⚠️ Error al enviar mensaje con botones: {response.text}")
-  except Exception as e:
-    logging.warning(f"⚠️ Excepción al enviar mensaje con botones: {e}")
+  for intento in range(1, 4):
+    try:
+      response = http_session.post(url, json=payload, timeout=25)
+      if response.status_code == 200:
+        return True
+      logging.warning(
+          f"⚠️ Error al enviar mensaje con botones (intento {intento}/3):"
+          f" {response.text}"
+      )
+    except Exception as e:
+      logging.warning(
+          f"⚠️ Excepción al enviar mensaje con botones (intento {intento}/3): {e}"
+      )
+    time.sleep(3)
+  return False
 
 
 def enviar_telegram_foto(photo_id, caption):
@@ -600,14 +627,21 @@ def enviar_telegram_foto(photo_id, caption):
       "caption": caption,
       "parse_mode": "Markdown",
   }
-  try:
-    response = http_session.post(url, json=payload, timeout=15)
-    if response.status_code != 200:
-      logging.warning(f"⚠️ Error al enviar foto al canal: {response.text}")
-  except Exception as e:
-    logging.warning(
-        f"⚠️ Excepción de conexión con Telegram al enviar foto: {e}"
-    )
+  for intento in range(1, 4):
+    try:
+      response = http_session.post(url, json=payload, timeout=25)
+      if response.status_code == 200:
+        return True
+      logging.warning(
+          f"⚠️ Error al enviar foto al canal (intento {intento}/3):"
+          f" {response.text}"
+      )
+    except Exception as e:
+      logging.warning(
+          f"⚠️ Excepción al enviar foto (intento {intento}/3): {e}"
+      )
+    time.sleep(3)
+  return False
 
 
 def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
@@ -620,14 +654,21 @@ def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
   }
   if reply_markup_dict:
     payload["reply_markup"] = reply_markup_dict
-  try:
-    response = http_session.post(url, json=payload, timeout=15)
-    if response.status_code != 200:
+  for intento in range(1, 4):
+    try:
+      response = http_session.post(url, json=payload, timeout=25)
+      if response.status_code == 200:
+        return True
       logging.warning(
-          f"⚠️ Error al enviar foto con botones al canal: {response.text}"
+          f"⚠️ Error al enviar foto con botones (intento {intento}/3):"
+          f" {response.text}"
       )
-  except Exception as e:
-    logging.warning(f"⚠️ Excepción al enviar foto con botones: {e}")
+    except Exception as e:
+      logging.warning(
+          f"⚠️ Excepción al enviar foto con botones (intento {intento}/3): {e}"
+      )
+    time.sleep(3)
+  return False
 
 
 def limpiar_memoria_diaria():
@@ -1000,7 +1041,6 @@ def verificar_resultados():
           continue
         procesados_en_esta_corrida.add(clave_slot)
 
-        # Registrar siempre en SQLite
         es_nuevo = verificar_y_registrar_resultado(
             fecha_actual_str,
             agencia_nombre,
@@ -1036,14 +1076,17 @@ def verificar_resultados():
             "•••••••••••••••••••••••••••••••••••\n"
             "📲 WHATSAPP: 04124489363"
         )
-        try:
-          enviar_telegram_con_botones(mensaje_res, markup_dict)
+        enviado = enviar_telegram_con_botones(mensaje_res, markup_dict)
+        if enviado:
           logging.info(
               f"[RESULT SENT] Resultado enviado a Telegram: {nombre_loteria} |"
               f" {hora} | {resultado_final}"
           )
-        except Exception as e:
-          logging.error(f"[RESULT ERROR] Error enviando a Telegram: {e}")
+        else:
+          logging.error(
+              f"[RESULT ERROR] No se pudo enviar tras 3 intentos: {nombre_loteria}"
+              f" | {hora}"
+          )
 
         time.sleep(2)
 
@@ -1062,14 +1105,11 @@ def verificar_resultados():
                   f"🕒 {hora}\n\n📲 WHATSAPP: 04124489363\n\n🍀 ¡Felicidades"
                   " a todos los que confiaron en Agencia Harold José!"
               )
-              try:
-                enviar_telegram_con_botones(mensaje_acierto, markup_dict)
+              if enviar_telegram_con_botones(mensaje_acierto, markup_dict):
                 logging.info(
                     "[RESULT SENT] Mensaje de acierto enviado a Telegram:"
                     f" {nombre_loteria} | {hora}"
                 )
-              except Exception as e:
-                logging.error(f"[RESULT ERROR] Error enviando acierto: {e}")
               time.sleep(2)
               break
 
@@ -1221,18 +1261,24 @@ def configurar_webhook():
     return
 
   webhook_url = f"{render_url}/{TOKEN}"
-  for intento in range(1, 6):
+  intento = 1
+  while True:
     try:
       bot.remove_webhook()
-      time.sleep(0.5)
+      time.sleep(1)
       bot.set_webhook(url=webhook_url)
-      logging.info(f"✅ Webhook configurado exitosamente en: {webhook_url}")
-      return
+      logging.info(
+          f"✅ Webhook configurado exitosamente en el intento {intento}:"
+          f" {webhook_url}"
+      )
+      break
     except Exception as e:
       logging.error(
-          f"❌ Error configurando webhook (intento {intento}/5): {e}"
+          f"❌ Error configurando webhook (intento {intento}): {e}. Reintentando"
+          " en 20s..."
       )
-      time.sleep(5)
+      intento += 1
+      time.sleep(20)
 
 
 logging.info("🚀 Inicializando servicios de Agencia Harold José...")
