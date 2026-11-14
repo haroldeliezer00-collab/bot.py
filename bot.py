@@ -16,7 +16,7 @@ import requests
 import urllib3.util.connection as urllib3_cn
 
 
-# Forzar IPv4 en toda la aplicación (soluciona Read timed out en Render hacia api.telegram.org)
+# Forzar IPv4 en toda la aplicación
 def allowed_gai_family():
   return socket.AF_INET
 
@@ -46,10 +46,11 @@ except Exception as e:
 # Desactivar advertencias de certificados SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Credenciales y canal principal configurado
+# Credenciales, Puente Cloudflare y canal principal configurado
 TOKEN = os.environ.get(
     "TELEGRAM_TOKEN", "8733552499:AAHt-U4OjLBH4mSNU0E4CXEYpz4gnSbVYak"
 )
+TG_API_BASE = "https://telegram-harold.criptoanubis.workers.dev"
 CANAL = "@resultadosagharoldjose"
 ENLACE_CANAL = "https://t.me/resultadosagharoldjose"
 ENLACE_POLLAS = "https://t.me/pollasydupletas"
@@ -200,7 +201,7 @@ def guardar_respaldo_en_telegram(clave, file_id):
   """Guarda los file_id en la nube de Telegram para que sobrevivan a los reinicios de Render."""
   for _ in range(2):
     try:
-      url_get = f"https://api.telegram.org/bot{TOKEN}/getMyCommands"
+      url_get = f"{TG_API_BASE}/bot{TOKEN}/getMyCommands"
       resp = http_session.get(url_get, timeout=8).json()
       comandos_actuales = resp.get("result", [])
 
@@ -222,7 +223,7 @@ def guardar_respaldo_en_telegram(clave, file_id):
             "description": f"{hoy_tag}|{taquilla_id}",
         })
 
-      url_set = f"https://api.telegram.org/bot{TOKEN}/setMyCommands"
+      url_set = f"{TG_API_BASE}/bot{TOKEN}/setMyCommands"
       r_set = http_session.post(
           url_set, json={"commands": nuevos_comandos}, timeout=8
       )
@@ -238,7 +239,7 @@ def recuperar_respaldo_de_telegram():
   """Recupera automáticamente las fotos guardadas desde Telegram al iniciar Render."""
   global imagen_cashea_file_id, imagen_taquilla_file_id, taquilla_activa_hoy
   try:
-    url_get = f"https://api.telegram.org/bot{TOKEN}/getMyCommands"
+    url_get = f"{TG_API_BASE}/bot{TOKEN}/getMyCommands"
     resp = http_session.get(url_get, timeout=8).json()
     if not resp.get("ok"):
       return
@@ -438,13 +439,13 @@ app = Flask("")
 def probar_conexion_telegram():
   try:
     r = http_session.get(
-        f"https://api.telegram.org/bot{TOKEN}/getMe", timeout=5
+        f"{TG_API_BASE}/bot{TOKEN}/getMe", timeout=6
     )
-    if r.status_code == 200:
-      return "CONECTADO 🟢 (API Telegram rápida por IPv4)"
-    return f"ERROR 🔴 (Código {r.status_code})"
-  except Exception:
-    return "TIMEOUT 🔴 (Sin respuesta de Telegram)"
+    if r.status_code == 200 and r.json().get("ok"):
+      return "CONECTADO 🟢 (Vía Cloudflare Worker ultrarrápido)"
+    return f"ERROR 🔴 (Código {r.status_code}: {r.text[:60]})"
+  except Exception as e:
+    return f"TIMEOUT 🔴 ({e})"
 
 
 @app.route("/")
@@ -498,7 +499,7 @@ def subir_imagen():
     return "No seleccionaste ninguna imagen.", 400
 
   try:
-    url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
+    url = f"{TG_API_BASE}/bot{TOKEN}/sendPhoto"
     caption_tmp = (
         caption_taquilla if tipo == "taquilla" else "Actualizando imagen Cashea..."
     )
@@ -517,7 +518,7 @@ def subir_imagen():
       guardar_estado_disco()
       guardar_respaldo_en_telegram("cashea", file_id)
       http_session.post(
-          f"https://api.telegram.org/bot{TOKEN}/deleteMessage",
+          f"{TG_API_BASE}/bot{TOKEN}/deleteMessage",
           json={"chat_id": CANAL, "message_id": msg_id},
           timeout=8,
       )
@@ -615,7 +616,7 @@ def normalizar_nombre(texto):
 
 
 def enviar_telegram(mensaje, disable_web_preview=True):
-  url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+  url = f"{TG_API_BASE}/bot{TOKEN}/sendMessage"
   payload = {
       "chat_id": CANAL,
       "text": mensaje,
@@ -640,7 +641,7 @@ def enviar_telegram(mensaje, disable_web_preview=True):
 
 
 def enviar_telegram_con_botones(mensaje, reply_markup_dict):
-  url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+  url = f"{TG_API_BASE}/bot{TOKEN}/sendMessage"
   payload = {
       "chat_id": CANAL,
       "text": mensaje,
@@ -666,7 +667,7 @@ def enviar_telegram_con_botones(mensaje, reply_markup_dict):
 
 
 def enviar_telegram_foto(photo_id, caption):
-  url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
+  url = f"{TG_API_BASE}/bot{TOKEN}/sendPhoto"
   payload = {
       "chat_id": CANAL,
       "photo": photo_id,
@@ -691,7 +692,7 @@ def enviar_telegram_foto(photo_id, caption):
 
 
 def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
-  url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
+  url = f"{TG_API_BASE}/bot{TOKEN}/sendPhoto"
   payload = {
       "chat_id": CANAL,
       "photo": photo_id,
@@ -1165,6 +1166,17 @@ def verificar_resultados():
     traceback.print_exc()
 
 
+def enviar_respuesta_privada(chat_id, text):
+  try:
+    http_session.post(
+        f"{TG_API_BASE}/bot{TOKEN}/sendMessage",
+        json={"chat_id": chat_id, "text": text},
+        timeout=8,
+    )
+  except Exception:
+    pass
+
+
 def procesar_mensajes_privados(message):
   global taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id
   caption = message.caption or message.text or ""
@@ -1178,14 +1190,11 @@ def procesar_mensajes_privados(message):
       guardar_respaldo_en_telegram("taquilla", imagen_taquilla_file_id)
       enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
       logging.info("✅ Taquilla activada y publicada con la imagen adjunta.")
-      try:
-        bot.reply_to(
-            message,
-            "✅ ¡Taquilla activada y publicada en el canal! Se reenviará"
-            " automáticamente a las 3:00 PM.",
-        )
-      except Exception:
-        pass
+      enviar_respuesta_privada(
+          message.chat.id,
+          "✅ ¡Taquilla activada y publicada en el canal! Se reenviará"
+          " automáticamente a las 3:00 PM.",
+      )
     else:
       taquilla_activa_hoy = True
       guardar_estado_disco()
@@ -1197,26 +1206,20 @@ def procesar_mensajes_privados(message):
       imagen_cashea_file_id = message.photo[-1].file_id
       guardar_estado_disco()
       guardar_respaldo_en_telegram("cashea", imagen_cashea_file_id)
-      try:
-        bot.reply_to(
-            message,
-            "✅ ¡Imagen de Cashea guardada en la nube de Telegram! Ya no se"
-            " borrará aunque Render se reinicie mañana.",
-        )
-      except Exception:
-        pass
+      enviar_respuesta_privada(
+          message.chat.id,
+          "✅ ¡Imagen de Cashea guardada en la nube de Telegram! Ya no se"
+          " borrará aunque Render se reinicie mañana.",
+      )
       logging.info(
           f"✅ Imagen de Cashea registrada en nube: {imagen_cashea_file_id}"
       )
     else:
-      try:
-        bot.reply_to(
-            message,
-            "ℹ️ Por favor adjunta la imagen con la palabra 'cashea' para"
-            " actualizarla correctamente.",
-        )
-      except Exception:
-        pass
+      enviar_respuesta_privada(
+          message.chat.id,
+          "ℹ️ Por favor adjunta la imagen con la palabra 'cashea' para"
+          " actualizarla correctamente.",
+      )
 
 
 @bot.message_handler(content_types=["photo"])
@@ -1291,10 +1294,10 @@ def iniciar_scheduler():
 
 def iniciar_polling():
   offset = 0
-  logging.info("📡 Escuchando mensajes y fotos en modo Polling directo...")
+  logging.info("📡 Escuchando mensajes y fotos vía Cloudflare Worker...")
   while True:
     try:
-      url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
+      url = f"{TG_API_BASE}/bot{TOKEN}/getUpdates"
       resp = http_session.get(
           url, params={"offset": offset, "timeout": 15}, timeout=20
       )
