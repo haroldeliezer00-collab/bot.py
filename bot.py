@@ -4,6 +4,7 @@ import logging
 import os
 import random
 import re
+import socket
 import sqlite3
 from threading import Thread
 import time
@@ -12,6 +13,16 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
 from flask import Flask, request
 import requests
+import urllib3.util.connection as urllib3_cn
+
+
+# Forzar IPv4 en toda la aplicación (soluciona Read timed out en Render hacia api.telegram.org)
+def allowed_gai_family():
+  return socket.AF_INET
+
+
+urllib3_cn.allowed_gai_family = allowed_gai_family
+
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 import urllib3
@@ -430,7 +441,7 @@ def probar_conexion_telegram():
         f"https://api.telegram.org/bot{TOKEN}/getMe", timeout=5
     )
     if r.status_code == 200:
-      return "CONECTADO 🟢 (API Telegram rápida)"
+      return "CONECTADO 🟢 (API Telegram rápida por IPv4)"
     return f"ERROR 🔴 (Código {r.status_code})"
   except Exception:
     return "TIMEOUT 🔴 (Sin respuesta de Telegram)"
