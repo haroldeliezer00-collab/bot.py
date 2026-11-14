@@ -16,8 +16,6 @@ import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 import urllib3
 
-database = None
-
 # Configuración de logging profesional para Render
 logging.basicConfig(
     level=logging.INFO,
@@ -39,7 +37,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TOKEN = os.environ.get(
     "TELEGRAM_TOKEN", "8733552499:AAF2R8Td6zdJGREMIWPXKLiSl--Gotcz-HI"
 )
-CANAL = "@resultadosagharoldjose"  # Canal oficial de producción indicado
+CANAL = "@resultadosagharoldjose"
 ENLACE_CANAL = "https://t.me/resultadosagharoldjose"
 ENLACE_POLLAS = "https://t.me/pollasydupletas"
 
@@ -142,13 +140,11 @@ def verificar_y_registrar_resultado(
   h_norm = limpiar_texto(str(hora)).upper()
   res_norm = limpiar_texto(str(resultado)).upper()
 
-  # Construcción del ID único normalizado
   result_id = f"{f_norm}_{ag_norm}_{lot_norm}_{h_norm}_{res_norm}"
 
   try:
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Operación atómica con INSERT OR IGNORE para prevenir condiciones de carrera
     cursor.execute(
         """
             INSERT OR IGNORE INTO sent_results (result_id, fecha, agencia, loteria, hora, resultado)
@@ -165,10 +161,6 @@ def verificar_y_registrar_resultado(
       )
       return True
     else:
-      logging.info(
-          f"[DUPLICATE IGNORED] Resultado duplicado descartado: {lot_norm} |"
-          f" {h_norm} | {res_norm} (ID: {result_id})"
-      )
       return False
   except Exception as e:
     logging.error(f"[RESULT ERROR] Error en base de datos SQLite: {e}")
@@ -178,13 +170,98 @@ def verificar_y_registrar_resultado(
       conn.close()
 
 
+def es_hora_actual_valida(hora_sorteo_str, tolerancia_minutos=45):
+  """
+  Verifica que la hora del sorteo corresponda al bloque horario actual en Venezuela.
+  Evita que si Render se reinicia a las 7:00 PM envíe resultados viejos de las 8:05 AM.
+  """
+  try:
+    ahora = datetime.now()
+    hora_limpia = re.sub(r"\s+", " ", hora_sorteo_str.strip().upper())
+    dt_sorteo = datetime.strptime(hora_limpia, "%I:%M %p").replace(
+        year=ahora.year, month=ahora.month, day=ahora.day
+    )
+    diferencia_minutos = (ahora - dt_sorteo).total_seconds() / 60.0
+
+    # Debe haber ocurrido ya (o hasta 5 min de adelanto por reloj) y no tener más de 45 min de viejo
+    if -5 <= diferencia_minutos <= tolerancia_minutos:
+      return True
+    return False
+  except Exception as e:
+    logging.warning(f"⚠️ No se pudo parsear hora '{hora_sorteo_str}': {e}")
+    return False
+
+
+def guardar_respaldo_en_telegram(clave, file_id):
+  """
+  Guarda el file_id en la nube de Telegram (en los comandos/descripción del bot)
+  para que sobreviva a cualquier reinicio de Render sin usar variables externas.
+  """
+  try:
+    url_get = f"https://api.telegram.org/bot{TOKEN}/getMyCommands"
+    resp = http_session.get(url_get, timeout=10).json()
+    comandos_actuales = resp.get("result", [])
+
+    # Filtrar comandos previos de esta clave
+    nuevos_comandos = [
+        c for c in comandos_actuales if not c["command"].startswith("img_")
+    ]
+
+    # Mantener las imágenes guardadas
+    cashea_id = file_id if clave == "cashea" else imagen_cashea_file_id
+    taquilla_id = file_id if clave == "taquilla" else imagen_taquilla_file_id
+
+    if cashea_id:
+      nuevos_comandos.append(
+          {"command": "img_cashea", "description": cashea_id}
+      )
+    if taquilla_id:
+      hoy_tag = datetime.now().strftime("%Y%m%d")
+      nuevos_comandos.append(
+          {"command": "img_taquilla", "description": f"{hoy_tag}|{taquilla_id}"}
+      )
+
+    url_set = f"https://api.telegram.org/bot{TOKEN}/setMyCommands"
+    http_session.post(url_set, json={"commands": nuevos_comandos}, timeout=10)
+    logging.info(f"☁️ Respaldo en nube de Telegram actualizado para: {clave}")
+  except Exception as e:
+    logging.warning(f"⚠️ No se pudo guardar respaldo en nube Telegram: {e}")
+
+
+def recuperar_respaldo_de_telegram():
+  """Recupera automáticamente las fotos guardadas desde Telegram al reiniciar Render."""
+  global imagen_cashea_file_id, imagen_taquilla_file_id, taquilla_activa_hoy
+  try:
+    url_get = f"https://api.telegram.org/bot{TOKEN}/getMyCommands"
+    resp = http_session.get(url_get, timeout=10).json()
+    comandos = resp.get("result", [])
+    hoy_tag = datetime.now().strftime("%Y%m%d")
+
+    for c in comandos:
+      if c["command"] == "img_cashea" and c.get("description"):
+        imagen_cashea_file_id = c["description"].strip()
+        logging.info("☁️ Imagen de Cashea recuperada desde Telegram.")
+      elif c["command"] == "img_taquilla" and c.get("description"):
+        partes = c["description"].strip().split("|", 1)
+        if len(partes) == 2 and partes[0] == hoy_tag:
+          imagen_taquilla_file_id = partes[1]
+          taquilla_activa_hoy = True
+          logging.info("☁️ Imagen de Taquilla Activa recuperada desde Telegram.")
+  except Exception as e:
+    logging.warning(f"⚠️ Error recuperando respaldo de Telegram: {e}")
+
+
 def cargar_estado_disco():
-  global primera_ejecucion, ultima_hora_polla, taquilla_activa_hoy, imagen_cashea_file_id, regalos_hoy
+  global primera_ejecucion, ultima_hora_polla, taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id, regalos_hoy
+  recuperar_respaldo_de_telegram()
+
   if os.path.exists(STATE_FILE):
     try:
       with open(STATE_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
-        imagen_cashea_file_id = data.get("imagen_cashea", None)
+        saved_cashea = data.get("imagen_cashea", None)
+        if saved_cashea and not imagen_cashea_file_id:
+          imagen_cashea_file_id = saved_cashea
 
         hoy_str = datetime.now().strftime("%Y-%m-%d")
         if data.get("fecha") == hoy_str:
@@ -195,15 +272,17 @@ def cargar_estado_disco():
                 datetime.strptime(h_data[0], "%Y-%m-%d").date(),
                 h_data[1],
             )
-          taquilla_activa_hoy = data.get("taquilla_activa", False)
+          if data.get("taquilla_activa"):
+            taquilla_activa_hoy = True
+          if data.get("imagen_taquilla"):
+            imagen_taquilla_file_id = data.get("imagen_taquilla")
           regalos_hoy = data.get("regalos_hoy", [])
-          logging.info("📂 Estado diario cargado desde disco.")
+          logging.info("📂 Estado diario cargado correctamente.")
           return
     except Exception as e:
       logging.warning(f"⚠️ Error cargando estado: {e}")
   primera_ejecucion = True
   ultima_hora_polla = None
-  taquilla_activa_hoy = False
   regalos_hoy = []
 
 
@@ -214,21 +293,13 @@ def guardar_estado_disco():
     if ultima_hora_polla:
       polla_serializable = [str(ultima_hora_polla[0]), ultima_hora_polla[1]]
 
-    existing_cashea = imagen_cashea_file_id
-    if not existing_cashea and os.path.exists(STATE_FILE):
-      try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-          old_data = json.load(f)
-          existing_cashea = old_data.get("imagen_cashea", None)
-      except Exception:
-        pass
-
     data = {
         "fecha": hoy_str,
         "primera_ejecucion": primera_ejecucion,
         "ultima_polla_hora": polla_serializable,
         "taquilla_activa": taquilla_activa_hoy,
-        "imagen_cashea": existing_cashea,
+        "imagen_taquilla": imagen_taquilla_file_id,
+        "imagen_cashea": imagen_cashea_file_id,
         "regalos_hoy": regalos_hoy,
     }
     with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -365,7 +436,7 @@ def home():
       else "DESACTIVADA 🔴 (No laborando)"
   )
   cashea_tag = (
-      "CONFIGURADA 🟢 (Imagen persistente cargada)"
+      "CONFIGURADA 🟢 (Guardada en nube Telegram)"
       if imagen_cashea_file_id
       else "SOLO TEXTO 🟡 (Sin imagen aún)"
   )
@@ -497,7 +568,7 @@ def enviar_telegram(mensaje, disable_web_preview=True):
       "disable_web_page_preview": disable_web_preview,
   }
   try:
-    response = http_session.post(url, json=payload, timeout=10)
+    response = http_session.post(url, json=payload, timeout=15)
     if response.status_code != 200:
       logging.warning(f"⚠️ Error al enviar al canal: {response.text}")
   except Exception as e:
@@ -514,7 +585,7 @@ def enviar_telegram_con_botones(mensaje, reply_markup_dict):
       "disable_web_page_preview": True,
   }
   try:
-    response = http_session.post(url, json=payload, timeout=10)
+    response = http_session.post(url, json=payload, timeout=15)
     if response.status_code != 200:
       logging.warning(f"⚠️ Error al enviar mensaje con botones: {response.text}")
   except Exception as e:
@@ -530,7 +601,7 @@ def enviar_telegram_foto(photo_id, caption):
       "parse_mode": "Markdown",
   }
   try:
-    response = http_session.post(url, json=payload, timeout=10)
+    response = http_session.post(url, json=payload, timeout=15)
     if response.status_code != 200:
       logging.warning(f"⚠️ Error al enviar foto al canal: {response.text}")
   except Exception as e:
@@ -550,7 +621,7 @@ def enviar_telegram_foto_con_botones(photo_id, caption, reply_markup_dict=None):
   if reply_markup_dict:
     payload["reply_markup"] = reply_markup_dict
   try:
-    response = http_session.post(url, json=payload, timeout=10)
+    response = http_session.post(url, json=payload, timeout=15)
     if response.status_code != 200:
       logging.warning(
           f"⚠️ Error al enviar foto con botones al canal: {response.text}"
@@ -567,8 +638,9 @@ def limpiar_memoria_diaria():
   ultima_hora_polla = None
   regalos_hoy = []
   guardar_estado_disco()
+  guardar_respaldo_en_telegram("cashea", imagen_cashea_file_id)
   logging.info(
-      "🧹 Memoria diaria limpiada. La imagen de Cashea se mantiene guardada."
+      "🧹 Memoria diaria limpiada. La imagen de Cashea se mantiene en la nube."
   )
 
 
@@ -721,6 +793,9 @@ def enviar_anuncio_publicitario():
 
 def enviar_anuncio_cashea():
   global imagen_cashea_file_id
+  if not imagen_cashea_file_id:
+    recuperar_respaldo_de_telegram()
+
   markup = InlineKeyboardMarkup()
   url_jugar = "https://wa.me/584124489363?text=Hola%2C%20quiero%20jugar%20con%20Cashea%20en%20Agencia%20Harold%20Jos%C3%A9."
   url_consultar = "https://wa.me/584124489363?text=Hola%2C%20quiero%20consultar%20mis%20cuotas%20de%20Cashea%20en%20Agencia%20Harold%20Jos%C3%A9."
@@ -779,6 +854,9 @@ def enviar_tasa_dolar():
 
 def tarea_envio_programado_taquilla():
   global taquilla_activa_hoy, imagen_taquilla_file_id
+  if not taquilla_activa_hoy:
+    recuperar_respaldo_de_telegram()
+
   if taquilla_activa_hoy:
     if imagen_taquilla_file_id:
       enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
@@ -813,7 +891,7 @@ def tarea_minuto_diez():
 
 
 def enviar_mensaje_cierre():
-  global taquilla_activa_hoy, imagen_taquilla_file_id, imagen_cashea_file_id, ultima_hora_polla, regalos_hoy
+  global taquilla_activa_hoy, imagen_taquilla_file_id, ultima_hora_polla, regalos_hoy
   enviar_telegram(
       "🎯 AGENCIA HAROLD JOSÉ 🎯\n\n🌙 ¡FINAL DE JORNADA! 🌙\n\nEstos fueron"
       " todos los resultados del día de hoy. ¡Gracias por jugar con nosotros!"
@@ -922,77 +1000,78 @@ def verificar_resultados():
           continue
         procesados_en_esta_corrida.add(clave_slot)
 
-        if primera_ejecucion:
-          # Registro inicial para evitar spam de resultados pasados al arrancar
-          verificar_y_registrar_resultado(
-              fecha_actual_str,
-              agencia_nombre,
-              nombre_loteria,
-              hora,
-              resultado_final,
+        # Registrar siempre en SQLite
+        es_nuevo = verificar_y_registrar_resultado(
+            fecha_actual_str,
+            agencia_nombre,
+            nombre_loteria,
+            hora,
+            resultado_final,
+        )
+
+        if primera_ejecucion or not es_nuevo:
+          continue
+
+        # FILTRO ANTI-HORAS VIEJAS: Solo enviar si corresponde a la hora actual (máx 45 min atrás)
+        if not es_hora_actual_valida(hora, tolerancia_minutos=45):
+          logging.info(
+              f"⏳ Resultado pasado ignorado para envío (fuera de hora actual):"
+              f" {nombre_loteria} | {hora} | {resultado_final}"
           )
-        else:
-          # Verificación y registro atómico centralizado
-          if verificar_y_registrar_resultado(
-              fecha_actual_str,
-              agencia_nombre,
-              nombre_loteria,
-              hora,
-              resultado_final,
-          ):
-            markup_wa = InlineKeyboardMarkup()
-            markup_wa.add(
-                InlineKeyboardButton(
-                    "📲 ESCRIBENOS AL WHATSAPP", url="https://wa.me/584124489363"
-                )
-            )
-            markup_dict = markup_wa.to_dict()
+          continue
 
-            mensaje_res = (
-                "🎯 AGENCIA HAROLD JOSÉ 🎯\n"
-                "•••••••••••••••••••••••••••••••••••\n"
-                f"🎰 {nombre_loteria}\n"
-                f"🕒 {hora}  {resultado_final}\n"
-                "•••••••••••••••••••••••••••••••••••\n"
-                "📲 WHATSAPP: 04124489363"
+        markup_wa = InlineKeyboardMarkup()
+        markup_wa.add(
+            InlineKeyboardButton(
+                "📲 ESCRIBENOS AL WHATSAPP", url="https://wa.me/584124489363"
             )
-            try:
-              enviar_telegram_con_botones(mensaje_res, markup_dict)
-              logging.info(
-                  f"[RESULT SENT] Resultado enviado a Telegram: {nombre_loteria}"
-                  f" | {hora} | {resultado_final}"
+        )
+        markup_dict = markup_wa.to_dict()
+
+        mensaje_res = (
+            "🎯 AGENCIA HAROLD JOSÉ 🎯\n"
+            "•••••••••••••••••••••••••••••••••••\n"
+            f"🎰 {nombre_loteria}\n"
+            f"🕒 {hora}  {resultado_final}\n"
+            "•••••••••••••••••••••••••••••••••••\n"
+            "📲 WHATSAPP: 04124489363"
+        )
+        try:
+          enviar_telegram_con_botones(mensaje_res, markup_dict)
+          logging.info(
+              f"[RESULT SENT] Resultado enviado a Telegram: {nombre_loteria} |"
+              f" {hora} | {resultado_final}"
+          )
+        except Exception as e:
+          logging.error(f"[RESULT ERROR] Error enviando a Telegram: {e}")
+
+        time.sleep(2)
+
+        num_match = re.search(r"^(\d{1,2})", resultado_final)
+        if num_match and regalos_hoy:
+          num_limpio = num_match.group(1)
+          for r_num, r_animal in regalos_hoy:
+            if (
+                num_limpio.lstrip("0") == r_num.lstrip("0")
+                or num_limpio == r_num
+            ):
+              mensaje_acierto = (
+                  "🎉🎉 ¡ACERTAMOS! 🎉🎉\n\n✅ 🎁 Regalo del Día\n\n"
+                  f"🎯 {resultado_final}\n"
+                  f"🎲 🎰 {nombre_loteria}\n"
+                  f"🕒 {hora}\n\n📲 WHATSAPP: 04124489363\n\n🍀 ¡Felicidades"
+                  " a todos los que confiaron en Agencia Harold José!"
               )
-            except Exception as e:
-              logging.error(f"[RESULT ERROR] Error enviando a Telegram: {e}")
-
-            time.sleep(2)
-
-            num_match = re.search(r"^(\d{1,2})", resultado_final)
-            if num_match and regalos_hoy:
-              num_limpio = num_match.group(1)
-              for r_num, r_animal in regalos_hoy:
-                if (
-                    num_limpio.lstrip("0") == r_num.lstrip("0")
-                    or num_limpio == r_num
-                ):
-                  mensaje_acierto = (
-                      "🎉🎉 ¡ACERTAMOS! 🎉🎉\n\n✅ 🎁 Regalo del Día\n\n"
-                      f"🎯 {resultado_final}\n"
-                      f"🎲 🎰 {nombre_loteria}\n"
-                      f"🕒 {hora}\n\n📲 WHATSAPP: 04124489363\n\n🍀"
-                      " ¡Felicidades a todos los que confiaron en Agencia Harold"
-                      " José!"
-                  )
-                  try:
-                    enviar_telegram_con_botones(mensaje_acierto, markup_dict)
-                    logging.info(
-                        "[RESULT SENT] Mensaje de acierto enviado a Telegram:"
-                        f" {nombre_loteria} | {hora}"
-                    )
-                  except Exception as e:
-                    logging.error(f"[RESULT ERROR] Error enviando acierto: {e}")
-                  time.sleep(2)
-                  break
+              try:
+                enviar_telegram_con_botones(mensaje_acierto, markup_dict)
+                logging.info(
+                    "[RESULT SENT] Mensaje de acierto enviado a Telegram:"
+                    f" {nombre_loteria} | {hora}"
+                )
+              except Exception as e:
+                logging.error(f"[RESULT ERROR] Error enviando acierto: {e}")
+              time.sleep(2)
+              break
 
     if primera_ejecucion:
       primera_ejecucion = False
@@ -1016,8 +1095,17 @@ def procesar_mensajes_privados(message):
       taquilla_activa_hoy = True
       imagen_taquilla_file_id = message.photo[-1].file_id
       guardar_estado_disco()
+      guardar_respaldo_en_telegram("taquilla", imagen_taquilla_file_id)
       enviar_telegram_foto(imagen_taquilla_file_id, caption_taquilla)
       logging.info("✅ Taquilla activada y publicada con la imagen adjunta.")
+      try:
+        bot.reply_to(
+            message,
+            "✅ ¡Taquilla activada y publicada en el canal! Se reenviará"
+            " automáticamente a las 3:00 PM.",
+        )
+      except Exception:
+        pass
     else:
       taquilla_activa_hoy = True
       guardar_estado_disco()
@@ -1028,21 +1116,27 @@ def procesar_mensajes_privados(message):
     if message.photo:
       imagen_cashea_file_id = message.photo[-1].file_id
       guardar_estado_disco()
-      bot.reply_to(
-          message,
-          "✅ ¡Imagen de Cashea guardada y actualizada permanentemente! Se"
-          " enviará automáticamente en sus horarios programados (de 9 AM a 4:30"
-          " PM).",
-      )
+      guardar_respaldo_en_telegram("cashea", imagen_cashea_file_id)
+      try:
+        bot.reply_to(
+            message,
+            "✅ ¡Imagen de Cashea guardada en la nube de Telegram! Ya no se"
+            " borrará aunque Render se reinicie mañana.",
+        )
+      except Exception:
+        pass
       logging.info(
-          "✅ Imagen de Cashea permanente registrada y almacenada en disco."
+          f"✅ Imagen de Cashea registrada en nube: {imagen_cashea_file_id}"
       )
     else:
-      bot.reply_to(
-          message,
-          "ℹ️ Por favor adjunta la imagen con la palabra 'cashea' para"
-          " actualizarla correctamente.",
-      )
+      try:
+        bot.reply_to(
+            message,
+            "ℹ️ Por favor adjunta la imagen con la palabra 'cashea' para"
+            " actualizarla correctamente.",
+        )
+      except Exception:
+        pass
 
 
 @bot.message_handler(content_types=["photo"])
@@ -1122,24 +1216,31 @@ def iniciar_scheduler():
 
 def configurar_webhook():
   render_url = os.environ.get("RENDER_EXTERNAL_URL")
-  if render_url:
-    webhook_url = f"{render_url}/{TOKEN}"
+  if not render_url:
+    logging.warning("⚠️ RENDER_EXTERNAL_URL no está definido.")
+    return
+
+  webhook_url = f"{render_url}/{TOKEN}"
+  for intento in range(1, 6):
     try:
       bot.remove_webhook()
       time.sleep(0.5)
       bot.set_webhook(url=webhook_url)
       logging.info(f"✅ Webhook configurado exitosamente en: {webhook_url}")
+      return
     except Exception as e:
-      logging.error(f"❌ Error configurando el webhook: {e}")
-  else:
-    logging.warning("⚠️ RENDER_EXTERNAL_URL no está definido.")
+      logging.error(
+          f"❌ Error configurando webhook (intento {intento}/5): {e}"
+      )
+      time.sleep(5)
 
 
-# Arrancar siempre los servicios de fondo (compatible con Gunicorn y Python directo)
 logging.info("🚀 Inicializando servicios de Agencia Harold José...")
 t_schedule = Thread(target=iniciar_scheduler, daemon=True)
 t_schedule.start()
-configurar_webhook()
+
+t_webhook = Thread(target=configurar_webhook, daemon=True)
+t_webhook.start()
 
 if __name__ == "__main__":
   port = int(os.environ.get("PORT", 5000))
