@@ -1139,84 +1139,6 @@ EMOJIS_ANIMAL_POR_NOMBRE = {
     "MANGO": "🥭",
 }
 
-EMOJIS_ANIMAL_POR_NUM = {
-    "0": "🐬",
-    "00": "🐋",
-    "01": "🐏",
-    "02": "🐂",
-    "03": "🐛",
-    "04": "🦂",
-    "05": "🦁",
-    "06": "🐸",
-    "07": "🦜",
-    "08": "🐭",
-    "09": "🦅",
-    "10": "🐯",
-    "11": "🐱",
-    "12": "🐎",
-    "13": "🐵",
-    "14": "🕊️",
-    "15": "🦊",
-    "16": "🐻",
-    "17": "🦃",
-    "18": "🫏",
-    "19": "🐐",
-    "20": "🐷",
-    "21": "🐓",
-    "22": "🐫",
-    "23": "🦓",
-    "24": "🦎",
-    "25": "🐔",
-    "26": "🐮",
-    "27": "🐶",
-    "28": "🦤",
-    "29": "🐘",
-    "30": "🐊",
-    "31": "🐾",
-    "32": "🐿️",
-    "33": "🐠",
-    "34": "🦌",
-    "35": "🦒",
-    "36": "🐍",
-    "37": "🐢",
-    "39": "🦉",
-    "40": "🐝",
-    "41": "🦘",
-    "43": "🦋",
-    "44": "🐾",
-    "45": "🐾",
-    "46": "🐆",
-    "47": "🦀",
-    "48": "🦔",
-    "49": "🦥",
-    "50": "🐾",
-    "51": "🐾",
-    "52": "🐙",
-    "53": "🐆",
-    "54": "🦗",
-    "57": "🦆",
-    "59": "🐆",
-    "60": "🦎",
-    "61": "🐼",
-    "63": "🦀",
-    "65": "🦍",
-    "66": "🐺",
-    "67": "🐾",
-    "68": "🐆",
-    "69": "🐰",
-    "70": "🦬",
-    "71": "🐾",
-    "72": "🦍",
-    "73": "🦛",
-    "77": "🐧",
-    "79": "🦑",
-    "85": "🪰",
-    "90": "🦑",
-    "93": "🐾",
-    "95": "🪲",
-    "96": "🐾",
-}
-
 EMOJIS_FRUI_POR_NUM = {
     "01": "💮",
     "09": "🍐",
@@ -1247,6 +1169,7 @@ ALIAS_LOTERIAS_PIZARRA = {
     "CHAIMA": "CHAIM",
     "CHAIM": "CHAIM",
     "MONJEMILLONARIO": "MONJE",
+    "ELMONJEMILLONARIO": "MONJE",
     "ELMONJE": "MONJE",
     "MONJE": "MONJE",
     "CALAMARMILLONARIAA": "CA-A",
@@ -1315,6 +1238,25 @@ ALIAS_LOTERIAS_PIZARRA = {
     "GUACA": "GUACA",
     "GUACHARO": "GUACA",
 }
+
+
+def _resolver_codigo_loteria(lot_db):
+  if lot_db in ALIAS_LOTERIAS_PIZARRA:
+    return ALIAS_LOTERIAS_PIZARRA[lot_db]
+  if "GRANJITA" in lot_db and "PLUS" in lot_db:
+    return "G.PLUS"
+  if "MONJE" in lot_db:
+    return "MONJE"
+  if "CHAIMA" in lot_db:
+    return "CHAIM"
+  if "CENTENA" in lot_db and "PLUS" not in lot_db:
+    return "CEN.A"
+  if "FRUIT" in lot_db or "FRUTI" in lot_db:
+    return "FRUI"
+  if "GUACAACTIVA" in lot_db or lot_db == "GUACA":
+    return "GUACA"
+  return None
+
 
 BLOQUES_PIZARRA = [
     (
@@ -1507,14 +1449,14 @@ def _formatear_celda_pizarra(codigo_loteria, resultado_raw):
 
   emoji = ""
   if codigo_loteria == "FRUI":
-    emoji = EMOJIS_FRUI_POR_NUM.get(num_fmt.strip(), "")
-  if not emoji:
+    emoji = EMOJIS_FRUI_POR_NUM.get(num_fmt.strip(), "💮")
+  else:
     for clave_anim, em in EMOJIS_ANIMAL_POR_NOMBRE.items():
       if clave_anim in animal_norm:
         emoji = em
         break
-  if not emoji:
-    emoji = EMOJIS_ANIMAL_POR_NUM.get(num_fmt.strip(), "🐾")
+    if not emoji:
+      emoji = "🐾"
 
   return f"{num_fmt}{emoji}"
 
@@ -1534,7 +1476,7 @@ def generar_pizarra_consolidada():
     conn.close()
 
     for lot_db, hora_db, res_db in filas:
-      cod_lot = ALIAS_LOTERIAS_PIZARRA.get(lot_db)
+      cod_lot = _resolver_codigo_loteria(lot_db)
       if not cod_lot:
         continue
       try:
