@@ -476,7 +476,8 @@ def home():
       "<button type='submit'>Guardar y Publicar</button></form><br>"
       "<b>Pizarra Consolidada (Minuto 10 y Minuto 50):</b><br>"
       "📋 <a href='/pizarra'><b>Ver / Copiar Pizarra Consolidada Actualizada (WhatsApp)</b></a><br>"
-      "👉 <a href='/test/pizarra'>Publicar Pizarra Consolidada Ahora en Telegram</a><br><br>"
+      "👉 <a href='/test/pizarra'>Publicar Pizarra Consolidada Ahora en Telegram</a><br>"
+      "🔍 <a href='/debug_db'>Ver nombres exactos detectados hoy en Base de Datos</a><br><br>"
       "<b>Enlaces de prueba rápida (Test instantáneo):</b><br>"
       "👉 <a href='/test/madrugada'>Probar Saludo de Madrugada (6:30 AM)</a><br>"
       "👉 <a href='/test/piramide'>Probar Pirámide Numérica con Sumas por Fila (6:31 AM)</a><br>"
@@ -491,6 +492,27 @@ def home():
       "👉 <a href='/test/resultados'>Forzar Revisión de Resultados Individuales</a><br>"
       "👉 <a href='/test/cierre'>Probar Mensaje de Cierre (9:10 PM)</a>"
   )
+
+
+@app.route("/debug_db")
+def debug_db():
+  hoy_str = datetime.now().strftime("%Y-%m-%d")
+  try:
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT DISTINCT loteria, COUNT(*) FROM sent_results WHERE fecha = ? GROUP BY loteria ORDER BY loteria",
+        (hoy_str,),
+    )
+    filas = cursor.fetchall()
+    conn.close()
+    items = "".join(
+        f"<li><b>{lot}</b> → Código: <code>{_resolver_codigo_loteria(lot)}</code> ({cnt} sorteos)</li>"
+        for lot, cnt in filas
+    )
+    return f"<h3>Loterías guardadas hoy ({hoy_str}) en SQLite:</h3><ul>{items}</ul><a href='/'>Volver</a>"
+  except Exception as e:
+    return f"Error: {e}"
 
 
 @app.route("/subir_imagen", methods=["POST"])
@@ -1170,6 +1192,8 @@ ALIAS_LOTERIAS_PIZARRA = {
     "CHAIM": "CHAIM",
     "MONJEMILLONARIO": "MONJE",
     "ELMONJEMILLONARIO": "MONJE",
+    "LOTOMONJE": "MONJE",
+    "LOTTOMONJE": "MONJE",
     "ELMONJE": "MONJE",
     "MONJE": "MONJE",
     "CALAMARMILLONARIAA": "CA-A",
@@ -1210,6 +1234,7 @@ ALIAS_LOTERIAS_PIZARRA = {
     "TROPICOGANA": "TROP",
     "TROP": "TROP",
     "GRANJITAPLUS": "G.PLUS",
+    "GRANJAPLUS": "G.PLUS",
     "LAGRANJITAPLUS": "G.PLUS",
     "GPLUS": "G.PLUS",
     "CENTENAPLUS": "C.PLUS",
@@ -1243,7 +1268,7 @@ ALIAS_LOTERIAS_PIZARRA = {
 def _resolver_codigo_loteria(lot_db):
   if lot_db in ALIAS_LOTERIAS_PIZARRA:
     return ALIAS_LOTERIAS_PIZARRA[lot_db]
-  if "GRANJITA" in lot_db and "PLUS" in lot_db:
+  if "GRANJ" in lot_db and "PLUS" in lot_db:
     return "G.PLUS"
   if "MONJE" in lot_db:
     return "MONJE"
