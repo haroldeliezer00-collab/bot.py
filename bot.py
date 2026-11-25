@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import logging
 import os
@@ -477,7 +477,7 @@ def home():
       "<b>Pizarra Consolidada (Minuto 10 y Minuto 50):</b><br>"
       "📋 <a href='/pizarra'><b>Ver / Copiar Pizarra Consolidada Actualizada (WhatsApp)</b></a><br>"
       "👉 <a href='/test/pizarra'>Publicar Pizarra Consolidada Ahora en Telegram</a><br>"
-      "🔍 <a href='/debug_db'>Ver nombres exactos detectados hoy en Base de Datos</a><br><br>"
+      "🔍 <a href='/debug_db'>Ver nombres y horas exactas en Base de Datos</a><br><br>"
       "<b>Enlaces de prueba rápida (Test instantáneo):</b><br>"
       "👉 <a href='/test/madrugada'>Probar Saludo de Madrugada (6:30 AM)</a><br>"
       "👉 <a href='/test/piramide'>Probar Pirámide Numérica con Sumas por Fila (6:31 AM)</a><br>"
@@ -501,16 +501,16 @@ def debug_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT DISTINCT loteria, COUNT(*) FROM sent_results WHERE fecha = ? GROUP BY loteria ORDER BY loteria",
+        "SELECT loteria, hora, resultado FROM sent_results WHERE fecha = ? ORDER BY loteria, hora",
         (hoy_str,),
     )
     filas = cursor.fetchall()
     conn.close()
     items = "".join(
-        f"<li><b>{lot}</b> → Código: <code>{_resolver_codigo_loteria(lot)}</code> ({cnt} sorteos)</li>"
-        for lot, cnt in filas
+        f"<li><b>{lot}</b> (<code>{_resolver_codigo_loteria(lot)}</code>) | {h} → {r}</li>"
+        for lot, h, r in filas
     )
-    return f"<h3>Loterías guardadas hoy ({hoy_str}) en SQLite:</h3><ul>{items}</ul><a href='/'>Volver</a>"
+    return f"<h3>Resultados guardados hoy ({hoy_str}):</h3><ul>{items}</ul><a href='/'>Volver</a>"
   except Exception as e:
     return f"Error: {e}"
 
@@ -1080,6 +1080,8 @@ EMOJIS_ANIMAL_POR_NOMBRE = {
     "LEON": "🦁",
     "RANA": "🐸",
     "PERICO": "🦜",
+    "GUACAMAYA": "🦜",
+    "LORO": "🦜",
     "RATON": "🐭",
     "AGUILA": "🦅",
     "TIGRE": "🐯",
@@ -1264,6 +1266,12 @@ ALIAS_LOTERIAS_PIZARRA = {
     "GUACHARO": "GUACA",
 }
 
+# Ajuste de minutos reales del sorteo respecto a la hora mostrada en la fila de la pizarra
+OFFSET_MINUTOS_PIZARRA = {
+    "MONJE": 5,    # Fila 08:00 -> busca 08:05 AM
+    "G.PLUS": -5,  # Fila 08:15 -> busca 08:10 AM
+}
+
 
 def _resolver_codigo_loteria(lot_db):
   if lot_db in ALIAS_LOTERIAS_PIZARRA:
@@ -1281,6 +1289,17 @@ def _resolver_codigo_loteria(lot_db):
   if "GUACAACTIVA" in lot_db or lot_db == "GUACA":
     return "GUACA"
   return None
+
+
+def _hora_busqueda_columna(col, hora_ampm):
+  offset = OFFSET_MINUTOS_PIZARRA.get(col, 0)
+  if offset == 0:
+    return hora_ampm
+  try:
+    dt = datetime.strptime(hora_ampm, "%I:%M %p") + timedelta(minutes=offset)
+    return dt.strftime("%I:%M %p")
+  except Exception:
+    return hora_ampm
 
 
 BLOQUES_PIZARRA = [
@@ -1539,11 +1558,16 @@ def generar_pizarra_consolidada():
       for col in cols_activas:
         if col in fijos_dict:
           valores_fila.append(fijos_dict[col])
-        elif (col, hora_ampm) in resultados_map:
-          valores_fila.append(resultados_map[(col, hora_ampm)])
-          hay_alguno_en_fila = True
         else:
-          valores_fila.append(None)
+          hora_consulta = _hora_busqueda_columna(col, hora_ampm)
+          if (col, hora_consulta) in resultados_map:
+            valores_fila.append(resultados_map[(col, hora_consulta)])
+            hay_alguno_en_fila = True
+          elif (col, hora_ampm) in resultados_map:
+            valores_fila.append(resultados_map[(col, hora_ampm)])
+            hay_alguno_en_fila = True
+          else:
+            valores_fila.append(None)
 
       celdas_finales = []
       for val in valores_fila:
