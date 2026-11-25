@@ -689,28 +689,60 @@ def enviar_telegram(mensaje, disable_web_preview=True):
 
 
 def enviar_telegram_texto_plano(mensaje, disable_web_preview=True):
-  """Envía texto sin parse_mode para proteger caracteres especiales de la pizarra consolidada."""
+  """Envía texto sin parse_mode y divide automáticamente si excede el límite de 4096 caracteres de Telegram."""
   url = f"{TG_API_BASE}/bot{TOKEN}/sendMessage"
-  payload = {
-      "chat_id": CANAL,
-      "text": mensaje,
-      "disable_web_page_preview": disable_web_preview,
-  }
-  for intento in range(1, 3):
-    try:
-      response = http_session.post(url, json=payload, timeout=10)
-      if response.status_code == 200:
-        logging.info("✅ Pizarra consolidada enviada correctamente al canal.")
-        return True
-      logging.warning(
-          f"⚠️ Error al enviar pizarra (intento {intento}/2): {response.text}"
-      )
-    except Exception as e:
-      logging.warning(
-          f"⚠️ Excepción al enviar pizarra (intento {intento}/2): {e}"
-      )
-    time.sleep(1)
-  return False
+  separador = "❄️🍬❄️🍬❄️🍬❄️🍬❄️🍬❄️"
+  partes = []
+
+  if len(mensaje) <= 3850:
+    partes = [mensaje]
+  else:
+    bloques = mensaje.split(f"\n{separador}\n")
+    actual = ""
+    for b in bloques:
+      candidato = f"{actual}\n{separador}\n{b}" if actual else b
+      if len(candidato) <= 3850:
+        actual = candidato
+      else:
+        if actual:
+          partes.append(actual)
+        actual = b
+    if actual:
+      partes.append(actual)
+
+  exito_total = True
+  for idx, parte in enumerate(partes, 1):
+    payload = {
+        "chat_id": CANAL,
+        "text": parte,
+        "disable_web_page_preview": disable_web_preview,
+    }
+    enviado_parte = False
+    for intento in range(1, 4):
+      try:
+        response = http_session.post(url, json=payload, timeout=12)
+        if response.status_code == 200:
+          logging.info(
+              f"✅ Pizarra consolidada enviada ({idx}/{len(partes)})"
+              " correctamente."
+          )
+          enviado_parte = True
+          break
+        logging.warning(
+            f"⚠️ Error al enviar pizarra parte {idx} (intento {intento}/3):"
+            f" {response.text}"
+        )
+      except Exception as e:
+        logging.warning(
+            f"⚠️ Excepción al enviar pizarra parte {idx} (intento {intento}/3):"
+            f" {e}"
+        )
+      time.sleep(1.5)
+    if not enviado_parte:
+      exito_total = False
+    if idx < len(partes):
+      time.sleep(1)
+  return exito_total
 
 
 def enviar_telegram_con_botones(mensaje, reply_markup_dict):
@@ -1266,7 +1298,6 @@ ALIAS_LOTERIAS_PIZARRA = {
     "GUACHARO": "GUACA",
 }
 
-# Ajuste de minutos reales del sorteo respecto a la hora mostrada en la fila de la pizarra
 OFFSET_MINUTOS_PIZARRA = {
     "MONJE": 5,    # Fila 08:00 -> busca 08:05 AM
     "G.PLUS": -5,  # Fila 08:15 -> busca 08:10 AM
@@ -1593,6 +1624,7 @@ def generar_pizarra_consolidada():
 
 def publicar_pizarra_consolidada():
   try:
+    logging.info("📊 Generando y publicando pizarra consolidada automática...")
     texto_pizarra = generar_pizarra_consolidada()
     enviar_telegram_texto_plano(texto_pizarra, disable_web_preview=True)
   except Exception as e:
@@ -1887,9 +1919,25 @@ def iniciar_scheduler():
 
   scheduler.add_job(enviar_aviso_tiempo_cumplido, "cron", hour="7-19", minute=55)
   scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
-  scheduler.add_job(tarea_minuto_diez, "cron", hour="7-17", minute=10)
-  scheduler.add_job(publicar_pizarra_consolidada, "cron", hour="8-19", minute=10)
-  scheduler.add_job(publicar_pizarra_consolidada, "cron", hour="7-19", minute=50)
+  scheduler.add_job(tarea_minuto_diez, "cron", hour="7-17", minute=10, second=0)
+  scheduler.add_job(
+      publicar_pizarra_consolidada,
+      "cron",
+      hour="8-19",
+      minute=10,
+      second=8,
+      misfire_grace_time=300,
+      coalesce=True,
+  )
+  scheduler.add_job(
+      publicar_pizarra_consolidada,
+      "cron",
+      hour="7-19",
+      minute=50,
+      second=0,
+      misfire_grace_time=300,
+      coalesce=True,
+  )
   scheduler.add_job(enviar_mensaje_cierre, "cron", hour=21, minute=10)
   scheduler.add_job(
       verificar_resultados, "interval", seconds=30, max_instances=1
