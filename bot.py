@@ -304,7 +304,7 @@ def guardar_estado_disco():
     data = {
         "fecha": hoy_str,
         "primera_ejecucion": primera_ejecucion,
-        "ultima_polla_hora": polla_serializable,
+        "ultima_hora_polla": polla_serializable,
         "taquilla_activa": taquilla_activa_hoy,
         "imagen_taquilla": imagen_taquilla_file_id,
         "imagen_cashea": imagen_cashea_file_id,
@@ -474,6 +474,9 @@ def home():
       "<option value='taquilla'>Imagen Taquilla Activa (Hoy + 3PM)</option></select> "
       "<input type='file' name='foto' accept='image/*' required> "
       "<button type='submit'>Guardar y Publicar</button></form><br>"
+      "<b>Pizarra Consolidada (Minuto 10 y Minuto 50):</b><br>"
+      "📋 <a href='/pizarra'><b>Ver / Copiar Pizarra Consolidada Actualizada (WhatsApp)</b></a><br>"
+      "👉 <a href='/test/pizarra'>Publicar Pizarra Consolidada Ahora en Telegram</a><br><br>"
       "<b>Enlaces de prueba rápida (Test instantáneo):</b><br>"
       "👉 <a href='/test/madrugada'>Probar Saludo de Madrugada (6:30 AM)</a><br>"
       "👉 <a href='/test/piramide'>Probar Pirámide Numérica con Sumas por Fila (6:31 AM)</a><br>"
@@ -607,6 +610,29 @@ def test_cierre():
   return ejecutar_en_segundo_plano(enviar_mensaje_cierre)
 
 
+@app.route("/test/pizarra")
+def test_pizarra():
+  return ejecutar_en_segundo_plano(publicar_pizarra_consolidada)
+
+
+@app.route("/pizarra")
+def ver_pizarra_web():
+  texto = generar_pizarra_consolidada()
+  return (
+      "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"
+      "<title>Pizarra Consolidada - Agencia Harold José</title></head>"
+      "<body style='font-family:sans-serif;max-width:520px;margin:20px auto;padding:10px;'>"
+      "<h3>📋 Pizarra Consolidada Actualizada</h3>"
+      "<button onclick='copiar()' style='padding:12px 18px;font-size:16px;background:#25D366;color:#fff;border:none;border-radius:8px;cursor:pointer;width:100%;margin-bottom:12px;'>"
+      "📋 COPIAR TABLA PARA WHATSAPP</button>"
+      "<textarea id='tabla' rows='32' style='width:100%;font-family:monospace;font-size:14px;padding:10px;'>"
+      f"{texto}</textarea><br><br>"
+      "<a href='/'>⬅️ Volver al Panel Principal</a>"
+      "<script>function copiar(){var t=document.getElementById('tabla');t.select();t.setSelectionRange(0,99999);navigator.clipboard.writeText(t.value);alert('✅ ¡Pizarra copiada! Ya puedes pegarla en WhatsApp.');}</script>"
+      "</body></html>"
+  )
+
+
 def limpiar_texto(texto):
   return " ".join(texto.split())
 
@@ -635,6 +661,31 @@ def enviar_telegram(mensaje, disable_web_preview=True):
     except Exception as e:
       logging.warning(
           f"⚠️ Excepción de conexión con Telegram (intento {intento}/2): {e}"
+      )
+    time.sleep(1)
+  return False
+
+
+def enviar_telegram_texto_plano(mensaje, disable_web_preview=True):
+  """Envía texto sin parse_mode para proteger caracteres especiales de la pizarra consolidada."""
+  url = f"{TG_API_BASE}/bot{TOKEN}/sendMessage"
+  payload = {
+      "chat_id": CANAL,
+      "text": mensaje,
+      "disable_web_page_preview": disable_web_preview,
+  }
+  for intento in range(1, 3):
+    try:
+      response = http_session.post(url, json=payload, timeout=10)
+      if response.status_code == 200:
+        logging.info("✅ Pizarra consolidada enviada correctamente al canal.")
+        return True
+      logging.warning(
+          f"⚠️ Error al enviar pizarra (intento {intento}/2): {response.text}"
+      )
+    except Exception as e:
+      logging.warning(
+          f"⚠️ Excepción al enviar pizarra (intento {intento}/2): {e}"
       )
     time.sleep(1)
   return False
@@ -993,6 +1044,558 @@ def enviar_mensaje_cierre():
   guardar_estado_disco()
 
 
+# ==============================================================================
+# MÓDULO INDEPENDIENTE: PIZARRA CONSOLIDADA AUTOMÁTICA (MINUTO 10 Y MINUTO 50)
+# ==============================================================================
+
+EMOJIS_ANIMAL_POR_NOMBRE = {
+    "DELFIN": "🐬",
+    "BALLENA": "🐋",
+    "CARNERO": "🐏",
+    "TORO": "🐂",
+    "CIEMPIES": "🐛",
+    "ALACRAN": "🦂",
+    "LEON": "🦁",
+    "RANA": "🐸",
+    "PERICO": "🦜",
+    "RATON": "🐭",
+    "AGUILA": "🦅",
+    "TIGRE": "🐯",
+    "GATO": "🐱",
+    "CABALLO": "🐎",
+    "MONO": "🐵",
+    "PALOMA": "🕊️",
+    "ZORRO": "🦊",
+    "OSO": "🐻",
+    "PAVO": "🦃",
+    "BURRO": "🫏",
+    "CHIVO": "🐐",
+    "COCHINO": "🐷",
+    "CERDO": "🐷",
+    "GALLO": "🐓",
+    "CAMELLO": "🐫",
+    "CEBRA": "🦓",
+    "IGUANA": "🦎",
+    "GALLINA": "🐔",
+    "VACA": "🐮",
+    "PERRO": "🐶",
+    "SAMURO": "🦤",
+    "ZAMURO": "🦤",
+    "ELEFANTE": "🐘",
+    "CAIMAN": "🐊",
+    "LAPA": "🐾",
+    "ARDILLA": "🐿️",
+    "PESCADO": "🐠",
+    "PEZ": "🐠",
+    "VENADO": "🦌",
+    "JIRAFA": "🦒",
+    "CULEBRA": "🐍",
+    "SERPIENTE": "🐍",
+    "TORTUGA": "🐢",
+    "AVISPA": "🐝",
+    "ABEJA": "🐝",
+    "CANGURO": "🦘",
+    "MARIPOSA": "🦋",
+    "JAGUAR": "🐆",
+    "PANTERA": "🐆",
+    "ERIZO": "🦔",
+    "PEREZA": "🦥",
+    "PEREZOSO": "🦥",
+    "PULPO": "🐙",
+    "GRILLO": "🦗",
+    "PATO": "🦆",
+    "PANDA": "🐼",
+    "CANGREJO": "🦀",
+    "GORILA": "🦍",
+    "LOBO": "🐺",
+    "ARANA": "🕷️",
+    "PAVOREAL": "🦚",
+    "CONEJO": "🐰",
+    "BUFALO": "🦬",
+    "HIPOPOTAMO": "🦛",
+    "PINGUINO": "🐧",
+    "CALAMAR": "🦑",
+    "MOSCA": "🪰",
+    "BUHO": "🦉",
+    "LECHUZA": "🦉",
+    "ESCARABAJO": "🪲",
+    "COMODIN": "🎰",
+    "PINO": "🍍",
+    "PINA": "🍍",
+    "BANANA": "🍌",
+    "CAMBUR": "🍌",
+    "DURAZNO": "🍑",
+    "MELOCOTON": "🍑",
+    "PERA": "🍐",
+    "FRESA": "🍓",
+    "SANDIA": "🍉",
+    "PATILLA": "🍉",
+    "UVA": "🍇",
+    "MANZANA": "🍎",
+    "NARANJA": "🍊",
+    "LIMON": "🍋",
+    "COCO": "🥥",
+    "CEREZA": "🍒",
+    "MANGO": "🥭",
+}
+
+EMOJIS_ANIMAL_POR_NUM = {
+    "0": "🐬",
+    "00": "🐋",
+    "01": "🐏",
+    "02": "🐂",
+    "03": "🐛",
+    "04": "🦂",
+    "05": "🦁",
+    "06": "🐸",
+    "07": "🦜",
+    "08": "🐭",
+    "09": "🦅",
+    "10": "🐯",
+    "11": "🐱",
+    "12": "🐎",
+    "13": "🐵",
+    "14": "🕊️",
+    "15": "🦊",
+    "16": "🐻",
+    "17": "🦃",
+    "18": "🫏",
+    "19": "🐐",
+    "20": "🐷",
+    "21": "🐓",
+    "22": "🐫",
+    "23": "🦓",
+    "24": "🦎",
+    "25": "🐔",
+    "26": "🐮",
+    "27": "🐶",
+    "28": "🦤",
+    "29": "🐘",
+    "30": "🐊",
+    "31": "🐾",
+    "32": "🐿️",
+    "33": "🐠",
+    "34": "🦌",
+    "35": "🦒",
+    "36": "🐍",
+    "37": "🐢",
+    "39": "🦉",
+    "40": "🐝",
+    "41": "🦘",
+    "43": "🦋",
+    "44": "🐾",
+    "45": "🐾",
+    "46": "🐆",
+    "47": "🦀",
+    "48": "🦔",
+    "49": "🦥",
+    "50": "🐾",
+    "51": "🐾",
+    "52": "🐙",
+    "53": "🐆",
+    "54": "🦗",
+    "57": "🦆",
+    "59": "🐆",
+    "60": "🦎",
+    "61": "🐼",
+    "63": "🦀",
+    "65": "🦍",
+    "66": "🐺",
+    "67": "🐾",
+    "68": "🐆",
+    "69": "🐰",
+    "70": "🦬",
+    "71": "🐾",
+    "72": "🦍",
+    "73": "🦛",
+    "77": "🐧",
+    "79": "🦑",
+    "85": "🪰",
+    "90": "🦑",
+    "93": "🐾",
+    "95": "🪲",
+    "96": "🐾",
+}
+
+EMOJIS_FRUI_POR_NUM = {
+    "01": "💮",
+    "09": "🍐",
+    "13": "🍌",
+    "22": "💮",
+    "23": "🍍",
+    "24": "💮",
+    "26": "💮",
+    "27": "🍑",
+    "31": "💮",
+    "34": "💮",
+}
+
+ALIAS_LOTERIAS_PIZARRA = {
+    "LOTTOACTIVO": "L.ACT",
+    "LOTOACTIVO": "L.ACT",
+    "LACT": "L.ACT",
+    "LAGRANJITA": "GRAJ",
+    "GRANJITA": "GRAJ",
+    "GRAJ": "GRAJ",
+    "RULETAACTIVA": "R.ATC",
+    "RATC": "R.ATC",
+    "GUACHAROACTIVO": "G.ARO",
+    "GARO": "G.ARO",
+    "LOTOCHAIMA": "CHAIM",
+    "ELCHAIMA": "CHAIM",
+    "CHAIMA": "CHAIM",
+    "CHAIM": "CHAIM",
+    "MONJEMILLONARIO": "MONJE",
+    "ELMONJE": "MONJE",
+    "MONJE": "MONJE",
+    "CAZALOTONA": "CA-A",
+    "CALAMARMILLONARIOA": "CA-A",
+    "CALAMARA": "CA-A",
+    "CAA": "CA-A",
+    "CAZALOTONB": "CA-B",
+    "CALAMARMILLONARIOB": "CA-B",
+    "CALAMARB": "CA-B",
+    "CAB": "CA-B",
+    "LOTOANIMALITO": "L.ANIM",
+    "LOTTOANIMALITOS": "L.ANIM",
+    "LOTTOANIMALITO": "L.ANIM",
+    "LANIM": "L.ANIM",
+    "LOTTOPANTERA": "L.PANT",
+    "LAPANTERA": "L.PANT",
+    "LPANT": "L.PANT",
+    "CENTENAANIMALITOS": "CEN.A",
+    "CENTAUROACTIVO": "CEN.A",
+    "CENA": "CEN.A",
+    "LOTTOREAL": "L.REAL",
+    "LREAL": "L.REAL",
+    "LOTTOMAX": "L.MAX",
+    "LMAX": "L.MAX",
+    "GUACHARITOMILLONARIO": "G.MIL",
+    "GMIL": "G.MIL",
+    "CONDORGANA": "COND",
+    "COND": "COND",
+    "FRUTIGANA": "FRUI",
+    "FRUITY": "FRUI",
+    "FRUI": "FRUI",
+    "TROPIGANA": "TROP",
+    "TROPICOGANA": "TROP",
+    "TROP": "TROP",
+    "GRANJITAPLUS": "G.PLUS",
+    "GPLUS": "G.PLUS",
+    "CENTENAPLUS": "C.PLUS",
+    "CAZALOTONPLUS": "C.PLUS",
+    "CHANCEPLUS": "C.PLUS",
+    "CPLUS": "C.PLUS",
+    "SELVAPLUS": "SELV",
+    "SELV": "SELV",
+    "GUACHARITO": "G.ITO",
+    "GITO": "G.ITO",
+    "LOTTOINTER": "L.INT",
+    "LOTTOINTERNACIONAL": "L.INT",
+    "LINT": "L.INT",
+    "GATAZO": "G.AZO",
+    "GAZO": "G.AZO",
+    "MEGAGUACA": "M.GUACA",
+    "MEGAGUACHARO": "M.GUACA",
+    "MGUACA": "M.GUACA",
+    "GUACAACTIVA37": "GUACA",
+    "GUACA37": "GUACA",
+    "GUACA": "GUACA",
+    "GUACHARO": "GUACA",
+}
+
+BLOQUES_PIZARRA = [
+    (
+        "HORA🎰 L.ACT GRAJ R.ATC",
+        ["L.ACT", "GRAJ", "R.ATC"],
+        [
+            ("08:00 AM", ["L.ACT", "GRAJ"], {}),
+            ("09:00 AM", ["L.ACT", "GRAJ", "R.ATC"], {}),
+            ("10:00 AM", ["L.ACT", "GRAJ", "R.ATC"], {}),
+            ("11:00 AM", ["L.ACT", "GRAJ", "R.ATC"], {}),
+            ("12:00 PM", ["L.ACT", "GRAJ", "R.ATC"], {}),
+            ("01:00 PM", ["L.ACT", "GRAJ", "R.ATC"], {}),
+            ("02:00 PM", ["L.ACT", "GRAJ", "R.ATC"], {}),
+            ("03:00 PM", ["L.ACT", "GRAJ", "R.ATC"], {}),
+            ("04:00 PM", ["L.ACT", "GRAJ", "R.ATC"], {}),
+            ("05:00 PM", ["L.ACT", "GRAJ", "R.ATC"], {}),
+            ("06:00 PM", ["L.ACT", "GRAJ", "R.ATC"], {}),
+            ("07:00 PM", ["L.ACT", "GRAJ", "R.ATC"], {}),
+        ],
+    ),
+    (
+        "HORA🎰G.ARO CHAIM MONJE",
+        ["G.ARO", "CHAIM", "MONJE"],
+        [
+            ("08:00 AM", ["G.ARO", "CHAIM", "MONJE"], {}),
+            ("09:00 AM", ["G.ARO", "CHAIM", "MONJE"], {}),
+            ("10:00 AM", ["G.ARO", "CHAIM", "MONJE"], {}),
+            ("11:00 AM", ["G.ARO", "CHAIM", "MONJE"], {}),
+            ("12:00 PM", ["G.ARO", "CHAIM", "MONJE"], {}),
+            ("01:00 PM", ["G.ARO", "CHAIM", "MONJE"], {}),
+            ("02:00 PM", ["G.ARO", "CHAIM", "MONJE"], {}),
+            ("03:00 PM", ["G.ARO", "CHAIM", "MONJE"], {}),
+            ("04:00 PM", ["G.ARO", "CHAIM", "MONJE"], {}),
+            ("05:00 PM", ["G.ARO", "CHAIM", "MONJE"], {}),
+            ("06:00 PM", ["G.ARO", "CHAIM", "MONJE"], {}),
+            ("07:00 PM", ["G.ARO", "CHAIM", "MONJE"], {}),
+        ],
+    ),
+    (
+        "HORA🎰CA-A CA-B",
+        ["CA-A", "CA-B"],
+        [
+            ("08:00 AM", ["CA-A", "CA-B"], {}),
+            ("09:00 AM", ["CA-A", "CA-B"], {}),
+            ("10:00 AM", ["CA-A", "CA-B"], {}),
+            ("11:00 AM", ["CA-A", "CA-B"], {}),
+            ("12:00 PM", ["CA-A", "CA-B"], {}),
+            ("01:00 PM", ["CA-A", "CA-B"], {}),
+            ("02:00 PM", ["CA-A", "CA-B"], {}),
+            ("03:00 PM", ["CA-A", "CA-B"], {}),
+            ("04:00 PM", ["CA-A", "CA-B"], {}),
+            ("05:00 PM", ["CA-A", "CA-B"], {}),
+            ("06:00 PM", ["CA-A", "CA-B"], {}),
+            ("07:00 PM", ["CA-A", "CA-B"], {}),
+        ],
+    ),
+    (
+        "HORA🎰 L.ANIM L.PANT CEN.A",
+        ["L.ANIM", "L.PANT", "CEN.A"],
+        [
+            ("08:00 AM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
+            ("09:00 AM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
+            ("10:00 AM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
+            ("11:00 AM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
+            ("12:00 PM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
+            ("01:00 PM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
+            ("02:00 PM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
+            ("03:00 PM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
+            ("04:00 PM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
+            ("05:00 PM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
+            ("06:00 PM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
+            ("07:00 PM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
+        ],
+    ),
+    (
+        "HORA🎰 L.REAL L.MAX G.MIL",
+        ["L.REAL", "L.MAX", "G.MIL"],
+        [
+            ("08:00 AM", ["L.REAL"], {}),
+            ("09:00 AM", ["L.REAL", "L.MAX", "G.MIL"], {}),
+            ("10:00 AM", ["L.REAL", "L.MAX", "G.MIL"], {}),
+            ("11:00 AM", ["L.REAL", "L.MAX", "G.MIL"], {}),
+            ("12:00 PM", ["L.REAL", "L.MAX", "G.MIL"], {}),
+            ("01:00 PM", ["L.REAL", "L.MAX", "G.MIL"], {}),
+            ("02:00 PM", ["L.REAL", "L.MAX", "G.MIL"], {"G.MIL": "🔕🔕"}),
+            ("03:00 PM", ["L.REAL", "L.MAX", "G.MIL"], {"G.MIL": "🔕🔕"}),
+            ("04:00 PM", ["L.REAL", "L.MAX", "G.MIL"], {}),
+            ("05:00 PM", ["L.REAL", "L.MAX", "G.MIL"], {}),
+            ("06:00 PM", ["L.REAL", "L.MAX", "G.MIL"], {}),
+            ("07:00 PM", ["L.REAL", "L.MAX", "G.MIL"], {}),
+        ],
+    ),
+    (
+        "HORA🎰COND FRUI TROP",
+        ["COND", "FRUI", "TROP"],
+        [
+            ("09:00 AM", ["COND", "FRUI", "TROP"], {}),
+            ("10:00 AM", ["COND", "FRUI", "TROP"], {}),
+            ("11:00 AM", ["COND", "FRUI", "TROP"], {}),
+            ("12:00 PM", ["COND", "FRUI", "TROP"], {}),
+            ("01:00 PM", ["COND", "FRUI", "TROP"], {}),
+            ("02:00 PM", ["COND", "FRUI", "TROP"], {}),
+            ("03:00 PM", ["COND", "FRUI", "TROP"], {}),
+            ("04:00 PM", ["COND", "FRUI", "TROP"], {}),
+            ("05:00 PM", ["COND", "FRUI", "TROP"], {}),
+            ("06:00 PM", ["COND", "FRUI", "TROP"], {}),
+            ("07:00 PM", ["COND", "FRUI", "TROP"], {}),
+        ],
+    ),
+    (
+        "HORA🎰G.PLUS C.PLUS  SELV",
+        ["G.PLUS", "C.PLUS", "SELV"],
+        [
+            ("08:15 AM", ["G.PLUS", "C.PLUS", "SELV"], {}),
+            ("09:15 AM", ["G.PLUS", "C.PLUS", "SELV"], {}),
+            ("10:15 AM", ["G.PLUS", "C.PLUS", "SELV"], {}),
+            ("11:15 AM", ["G.PLUS", "C.PLUS", "SELV"], {}),
+            ("12:15 PM", ["G.PLUS", "C.PLUS", "SELV"], {}),
+            ("01:15 PM", ["G.PLUS", "C.PLUS", "SELV"], {}),
+            ("02:15 PM", ["G.PLUS", "C.PLUS", "SELV"], {}),
+            ("03:15 PM", ["G.PLUS", "C.PLUS", "SELV"], {}),
+            ("04:15 PM", ["G.PLUS", "C.PLUS", "SELV"], {}),
+            ("05:15 PM", ["G.PLUS", "C.PLUS", "SELV"], {}),
+            ("06:15 PM", ["G.PLUS", "C.PLUS", "SELV"], {}),
+            ("07:15 PM", ["G.PLUS", "C.PLUS"], {}),
+        ],
+    ),
+    (
+        "HORA🎰G.ITO L.INT G.AZO",
+        ["G.ITO", "L.INT", "G.AZO"],
+        [
+            ("08:30 AM", ["G.ITO", "L.INT"], {}),
+            ("09:30 AM", ["G.ITO", "L.INT", "G.AZO"], {}),
+            ("10:30 AM", ["G.ITO", "L.INT", "G.AZO"], {}),
+            ("11:30 AM", ["G.ITO", "L.INT", "G.AZO"], {}),
+            ("12:30 PM", ["G.ITO", "L.INT", "G.AZO"], {}),
+            ("01:30 PM", ["G.ITO", "L.INT", "G.AZO"], {}),
+            ("02:30 PM", ["G.ITO", "L.INT", "G.AZO"], {"G.AZO": "🔕🔕"}),
+            ("03:30 PM", ["G.ITO", "L.INT", "G.AZO"], {"G.AZO": "🔕🔕"}),
+            ("04:30 PM", ["G.ITO", "L.INT", "G.AZO"], {}),
+            ("05:30 PM", ["G.ITO", "L.INT", "G.AZO"], {}),
+            ("06:30 PM", ["G.ITO", "L.INT", "G.AZO"], {}),
+            ("07:30 PM", ["G.ITO", "L.INT", "G.AZO"], {}),
+        ],
+    ),
+    (
+        "HORA🎰M.GUACA GUACA",
+        ["M.GUACA", "GUACA"],
+        [
+            ("07:30 AM", ["M.GUACA"], {}),
+            ("08:30 AM", ["M.GUACA", "GUACA"], {}),
+            ("09:30 AM", ["M.GUACA", "GUACA"], {}),
+            ("10:30 AM", ["M.GUACA", "GUACA"], {}),
+            ("11:30 AM", ["M.GUACA", "GUACA"], {}),
+            ("12:30 PM", ["M.GUACA", "GUACA"], {}),
+            ("01:30 PM", ["M.GUACA", "GUACA"], {}),
+            ("02:30 PM", ["M.GUACA", "GUACA"], {"GUACA": "🔕🔕"}),
+            ("03:30 PM", ["M.GUACA", "GUACA"], {}),
+            ("04:30 PM", ["M.GUACA", "GUACA"], {}),
+            ("05:30 PM", ["M.GUACA", "GUACA"], {}),
+            ("06:30 PM", ["M.GUACA", "GUACA"], {}),
+            ("07:30 PM", ["M.GUACA", "GUACA"], {}),
+        ],
+    ),
+]
+
+
+def _formatear_celda_pizarra(codigo_loteria, resultado_raw):
+  partes = resultado_raw.split("-", 1)
+  num_str = partes[0].strip()
+  animal_str = partes[1].strip() if len(partes) > 1 else ""
+  animal_norm = re.sub(
+      r"[^A-Z]",
+      "",
+      animal_str.upper()
+      .replace("Á", "A")
+      .replace("É", "E")
+      .replace("Í", "I")
+      .replace("Ó", "O")
+      .replace("Ú", "U")
+      .replace("Ñ", "N"),
+  )
+
+  if num_str == "00":
+    num_fmt = "00"
+  elif num_str == "0":
+    num_fmt = "  0"
+  else:
+    num_fmt = f"{int(num_str):02d}"
+
+  emoji = ""
+  if codigo_loteria == "FRUI":
+    emoji = EMOJIS_FRUI_POR_NUM.get(num_fmt.strip(), "")
+  if not emoji:
+    for clave_anim, em in EMOJIS_ANIMAL_POR_NOMBRE.items():
+      if clave_anim in animal_norm:
+        emoji = em
+        break
+  if not emoji:
+    emoji = EMOJIS_ANIMAL_POR_NUM.get(num_fmt.strip(), "🐾")
+
+  return f"{num_fmt}{emoji}"
+
+
+def generar_pizarra_consolidada():
+  hoy_str = datetime.now().strftime("%Y-%m-%d")
+  resultados_map = {}
+
+  try:
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT loteria, hora, resultado FROM sent_results WHERE fecha = ?",
+        (hoy_str,),
+    )
+    filas = cursor.fetchall()
+    conn.close()
+
+    for lot_db, hora_db, res_db in filas:
+      cod_lot = ALIAS_LOTERIAS_PIZARRA.get(lot_db)
+      if not cod_lot:
+        continue
+      try:
+        dt_h = datetime.strptime(hora_db.strip().upper(), "%I:%M %p")
+        hora_key = dt_h.strftime("%I:%M %p")
+      except Exception:
+        hora_key = hora_db.strip().upper()
+      resultados_map[(cod_lot, hora_key)] = _formatear_celda_pizarra(
+          cod_lot, res_db
+      )
+  except Exception as e:
+    logging.warning(f"⚠️ Nota leyendo resultados para pizarra: {e}")
+
+  lineas = [
+      "🎄🎁AGENCIA HAROLD JOSÉ🎁🎄",
+      "❄️ SEGURIDAD Y CONFIANZA ❄️",
+      "⭐ RESULTADOS OFICIALES ⭐",
+      "📲 ¡JUEGA AQUÍ! 👇👇",
+      "💬 WHATSAPP: 04124489363",
+      "📢 CANAL DE RESULTADOS:",
+      "https://t.me/resultadosagharoldjose",
+      "✨🎅 Más de 6 años brindando confianza y seguridad 🎅✨",
+      "🎄⛄🎁🎄⛄🎁🎄⛄🎁🎄⛄",
+  ]
+
+  for idx_bloque, (titulo_bloque, _, filas_bloque) in enumerate(
+      BLOQUES_PIZARRA
+  ):
+    lineas.append(titulo_bloque)
+    for hora_ampm, cols_activas, fijos_dict in filas_bloque:
+      hora_corta = hora_ampm.split(" ")[0]
+      valores_fila = []
+      hay_alguno_en_fila = False
+
+      for col in cols_activas:
+        if col in fijos_dict:
+          valores_fila.append(fijos_dict[col])
+        elif (col, hora_ampm) in resultados_map:
+          valores_fila.append(resultados_map[(col, hora_ampm)])
+          hay_alguno_en_fila = True
+        else:
+          valores_fila.append(None)
+
+      celdas_finales = []
+      for val in valores_fila:
+        if val is not None:
+          celdas_finales.append(val)
+        elif hay_alguno_en_fila:
+          celdas_finales.append("###")
+        else:
+          celdas_finales.append("")
+
+      cuerpo_fila = "|".join(celdas_finales)
+      if cuerpo_fila:
+        lineas.append(f"⏰{hora_corta}:. {cuerpo_fila}")
+      else:
+        lineas.append(f"⏰{hora_corta}:.")
+
+    if idx_bloque < len(BLOQUES_PIZARRA) - 1:
+      lineas.append("❄️🍬❄️🍬❄️🍬❄️🍬❄️🍬❄️")
+
+  lineas.append("🎄🎁🎅 MUCHA SUERTE EN SUS JUGADAS Y ¡FELIZ NAVIDAD! 🎅🎁🎄")
+  return "\n".join(lineas)
+
+
+def publicar_pizarra_consolidada():
+  try:
+    texto_pizarra = generar_pizarra_consolidada()
+    enviar_telegram_texto_plano(texto_pizarra, disable_web_preview=True)
+  except Exception as e:
+    logging.error(f"⚠️ Error publicando pizarra consolidada: {e}")
+
+
 def verificar_resultados():
   global primera_ejecucion, regalos_hoy
   try:
@@ -1282,6 +1885,8 @@ def iniciar_scheduler():
   scheduler.add_job(enviar_aviso_tiempo_cumplido, "cron", hour="7-19", minute=55)
   scheduler.add_job(tarea_envio_programado_taquilla, "cron", hour=15, minute=0)
   scheduler.add_job(tarea_minuto_diez, "cron", hour="7-17", minute=10)
+  scheduler.add_job(publicar_pizarra_consolidada, "cron", hour="8-19", minute=10)
+  scheduler.add_job(publicar_pizarra_consolidada, "cron", hour="7-19", minute=50)
   scheduler.add_job(enviar_mensaje_cierre, "cron", hour=21, minute=10)
   scheduler.add_job(
       verificar_resultados, "interval", seconds=30, max_instances=1
