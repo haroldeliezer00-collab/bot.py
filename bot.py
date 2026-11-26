@@ -1123,6 +1123,7 @@ EMOJIS_ANIMAL_POR_NOMBRE = [
     ("MARIQUITA", "🐞"),
     ("ESCARABAJO", "🪲"),
     ("ESCORPION", "🦂"),
+    ("TARANTULA", "🕷️"),
     ("PEREZOSO", "🦥"),
     ("PEREZOSA", "🦥"),
     ("CANGREJO", "🦀"),
@@ -1158,6 +1159,7 @@ EMOJIS_ANIMAL_POR_NOMBRE = [
     ("OVEJA", "🐑"),
     ("CHIVO", "🐐"),
     ("CABRA", "🐐"),
+    ("TORONJA", "💮"),
     ("TORO", "🐂"),
     ("VACA", "🐮"),
     ("BUEY", "🐂"),
@@ -1181,6 +1183,7 @@ EMOJIS_ANIMAL_POR_NOMBRE = [
     ("OSO", "🐻"),
     ("ZORRO", "🦊"),
     ("LOBO", "🐺"),
+    ("CAMALEON", "🦎"),
     ("LEON", "🦁"),
     ("TIGRE", "🐯"),
     ("JAGUAR", "🐆"),
@@ -1211,12 +1214,12 @@ EMOJIS_ANIMAL_POR_NOMBRE = [
     ("GALLO", "🐓"),
     ("POLLITO", "🐤"),
     ("PAVO", "🦃"),
+    ("ARANA", "🕷️"),
     ("RANA", "🐸"),
     ("SAPO", "🐸"),
     ("TORTUGA", "🐢"),
     ("CAIMAN", "🐊"),
     ("IGUANA", "🦎"),
-    ("CAMALEON", "🦎"),
     ("LAGARTO", "🦎"),
     ("DRAGON", "🐉"),
     ("CULEBRA", "🐍"),
@@ -1235,11 +1238,12 @@ EMOJIS_ANIMAL_POR_NOMBRE = [
     ("AVISPA", "🐝"),
     ("ABEJA", "🐝"),
     ("GRILLO", "🦗"),
-    ("ARANA", "🕷️"),
     ("MOSCA", "🪰"),
     ("MOSQUITO", "🦟"),
     ("CUCARACHA", "🪳"),
     ("COMODIN", "🎰"),
+    ("CEBRA", "🦓"),
+    ("ZEBRA", "🦓"),
     ("GRANADA", "🍎"),
     ("MANZANA", "🍎"),
     ("CIRUELA", "🫐"),
@@ -1369,6 +1373,16 @@ ALIAS_LOTERIAS_PIZARRA = {
     "GUACA37": "GUACA",
     "GUACA": "GUACA",
     "GUACHARO": "GUACA",
+    "MEGAANIMAL": "MG.A",
+    "MGA": "MG.A",
+    "CHANCEANIMAL": "CHN.A",
+    "CHANCEANIMALITOS": "CHN.A",
+    "CHNA": "CHN.A",
+    "LOTTOACTIVORDOMINICANA": "L.RD",
+    "LOTOACTIVORDOMINICANA": "L.RD",
+    "LOTTOACTIVOREPUBLICADOMINICANA": "L.RD",
+    "LOTTOACTIVODOMINICANA": "L.RD",
+    "LRD": "L.RD",
 }
 
 OFFSET_MINUTOS_PIZARRA = {
@@ -1392,6 +1406,12 @@ def _resolver_codigo_loteria(lot_db):
     return "FRUI"
   if "GUACAACTIVA" in lot_db or lot_db == "GUACA":
     return "GUACA"
+  if "MEGAANIMAL" in lot_db:
+    return "MG.A"
+  if "CHANCEANIMAL" in lot_db:
+    return "CHN.A"
+  if "DOMINICANA" in lot_db:
+    return "L.RD"
   return None
 
 
@@ -1477,6 +1497,7 @@ BLOQUES_PIZARRA = [
             ("05:00 PM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
             ("06:00 PM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
             ("07:00 PM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
+            ("08:00 PM", ["L.ANIM", "L.PANT", "CEN.A"], {}),
         ],
     ),
     (
@@ -1495,6 +1516,7 @@ BLOQUES_PIZARRA = [
             ("05:00 PM", ["L.REAL", "L.MAX", "G.MIL"], {}),
             ("06:00 PM", ["L.REAL", "L.MAX", "G.MIL"], {}),
             ("07:00 PM", ["L.REAL", "L.MAX", "G.MIL"], {}),
+            ("08:00 PM", ["L.REAL", "L.MAX", "G.MIL"], {}),
         ],
     ),
     (
@@ -1530,6 +1552,7 @@ BLOQUES_PIZARRA = [
             ("05:15 PM", ["G.PLUS", "C.PLUS", "SELV"], {}),
             ("06:15 PM", ["G.PLUS", "C.PLUS", "SELV"], {}),
             ("07:15 PM", ["G.PLUS", "C.PLUS"], {}),
+            ("08:15 PM", ["G.PLUS", "C.PLUS"], {}),
         ],
     ),
     (
@@ -1548,6 +1571,7 @@ BLOQUES_PIZARRA = [
             ("05:30 PM", ["G.ITO", "L.INT", "G.AZO"], {}),
             ("06:30 PM", ["G.ITO", "L.INT", "G.AZO"], {}),
             ("07:30 PM", ["G.ITO", "L.INT", "G.AZO"], {}),
+            ("08:30 PM", ["G.ITO", "L.INT", "G.AZO"], {}),
         ],
     ),
     (
@@ -1567,6 +1591,25 @@ BLOQUES_PIZARRA = [
             ("05:30 PM", ["M.GUACA", "GUACA"], {}),
             ("06:30 PM", ["M.GUACA", "GUACA"], {}),
             ("07:30 PM", ["M.GUACA", "GUACA"], {}),
+        ],
+    ),
+    (
+        "HORA🎰MG.A CHN.A - L.RD",
+        ["MG.A", "CHN.A", "L.RD"],
+        [
+            ("08:00 AM", ["MG.A", "CHN.A", "L.RD"], {}),
+            ("09:00 AM", ["MG.A", "CHN.A", "L.RD"], {}),
+            ("10:00 AM", ["MG.A", "CHN.A", "L.RD"], {}),
+            ("11:00 AM", ["MG.A", "CHN.A", "L.RD"], {}),
+            ("12:00 PM", ["MG.A", "CHN.A", "L.RD"], {}),
+            ("01:00 PM", ["MG.A", "CHN.A", "L.RD"], {}),
+            ("02:00 PM", ["MG.A", "CHN.A", "L.RD"], {}),
+            ("03:00 PM", ["MG.A", "CHN.A", "L.RD"], {}),
+            ("04:00 PM", ["MG.A", "CHN.A", "L.RD"], {}),
+            ("05:00 PM", ["MG.A", "CHN.A", "L.RD"], {}),
+            ("06:00 PM", ["MG.A", "CHN.A", "L.RD"], {}),
+            ("07:00 PM", ["MG.A", "CHN.A", "L.RD"], {}),
+            ("08:00 PM", ["MG.A", "CHN.A", "L.RD"], {}),
         ],
     ),
 ]
@@ -1993,7 +2036,7 @@ def iniciar_scheduler():
   scheduler.add_job(
       publicar_pizarra_consolidada,
       "cron",
-      hour="8-19",
+      hour="8-20",
       minute=10,
       second=8,
       misfire_grace_time=300,
@@ -2002,7 +2045,7 @@ def iniciar_scheduler():
   scheduler.add_job(
       publicar_pizarra_consolidada,
       "cron",
-      hour="7-19",
+      hour="7-20",
       minute=50,
       second=0,
       misfire_grace_time=300,
