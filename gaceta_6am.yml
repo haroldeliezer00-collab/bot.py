@@ -1,0 +1,31 @@
+name: Gaceta Oficial 6AM Venezuela
+
+on:
+  schedule:
+    # 6:00 AM hora de Venezuela (VET = UTC-4 -> 10:00 UTC)
+    - cron: "0 10 * * *"
+  workflow_dispatch:
+
+jobs:
+  publicar-gacetas-6am:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar Pillow
+        run: pip install pillow
+
+      - name: Generar y enviar los 9 afiches de Gaceta Oficial al canal
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CANAL_ID: "@resultadosagharoldjose"
+          WORKER_API_URL: "https://api-resultados-harold.agharoldjose.workers.dev"
+          TELEGRAM_PROXY_URL: "https://telegram-harold.criptoanubis.workers.dev"
+          WHATSAPP_URL: "https://wa.me/584124489363?text=Hola%20Agencia%20Harold%20Jos%C3%A9,%20quiero%20jugar"
+        run: python gaceta_diaria.py
